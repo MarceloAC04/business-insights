@@ -48,7 +48,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatBRL, nomeMes } from "@/lib/format";
+import { formatBRL, formatMoedaInput, formatTelefone, nomeMes, parseMoedaInput } from "@/lib/format";
 import {
   textoDoErro,
   useCriarCustoFixo,
@@ -200,8 +200,8 @@ function PerfilPage() {
     setPerfil({
       nome: s.nome,
       proprietaria: s.proprietaria,
-      telefone: s.telefone_whatsapp ?? "",
-      meta: String(s.meta_faturamento_mensal),
+      telefone: formatTelefone(s.telefone_whatsapp ?? ""),
+      meta: formatMoedaInput(String(Math.round(s.meta_faturamento_mensal * 100))),
     });
   }, [perfilServidor]);
 
@@ -224,7 +224,7 @@ function PerfilPage() {
     }, 0);
 
   const salvarDados = () => {
-    const meta = Number(perfil.meta.replace(",", "."));
+    const meta = parseMoedaInput(perfil.meta);
     if (!perfil.nome.trim() || !perfil.proprietaria.trim()) {
       toast.error("Informe o nome do salão e da profissional.");
       return;
@@ -234,7 +234,7 @@ function PerfilPage() {
         nome: perfil.nome.trim(),
         proprietaria: perfil.proprietaria.trim(),
         telefone_whatsapp: perfil.telefone.trim() || null,
-        meta_faturamento_mensal: Number.isFinite(meta) ? meta : 0,
+        meta_faturamento_mensal: meta,
       },
       {
         onSuccess: () => toast.success("Dados salvos."),
@@ -244,7 +244,7 @@ function PerfilPage() {
   };
 
   const cadastrarCusto = () => {
-    const valor = Number(formCusto.valor.replace(",", "."));
+    const valor = parseMoedaInput(formCusto.valor);
     const dia = Number(formCusto.dia);
     if (!formCusto.descricao.trim() || !(valor > 0) || !(dia >= 1 && dia <= 31)) {
       toast.error("Informe descrição, valor e um dia de vencimento entre 1 e 31.");
@@ -419,7 +419,7 @@ function PerfilPage() {
                     <Input
                       id="telefone"
                       value={perfil.telefone}
-                      onChange={(e) => setPerfil({ ...perfil, telefone: e.target.value })}
+                      onChange={(e) => setPerfil({ ...perfil, telefone: formatTelefone(e.target.value) })}
                       placeholder="(00) 00000-0000"
                     />
                   </div>
@@ -429,7 +429,8 @@ function PerfilPage() {
                       id="meta-fat"
                       inputMode="decimal"
                       value={perfil.meta}
-                      onChange={(e) => setPerfil({ ...perfil, meta: e.target.value })}
+                      onChange={(e) => setPerfil({ ...perfil, meta: formatMoedaInput(e.target.value) })}
+                      placeholder="0,00"
                     />
                   </div>
                 </div>
@@ -695,7 +696,7 @@ function PerfilPage() {
                   id="valor-custo"
                   inputMode="decimal"
                   value={formCusto.valor}
-                  onChange={(e) => setFormCusto({ ...formCusto, valor: e.target.value })}
+                  onChange={(e) => setFormCusto({ ...formCusto, valor: formatMoedaInput(e.target.value) })}
                   placeholder="0,00"
                 />
               </div>
