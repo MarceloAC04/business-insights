@@ -44,6 +44,33 @@ foi pedido explicitamente, e vale a partir desta data.
   **Não inventar isso ad-hoc tela por tela** — é a mesma razão pela qual o padrão
   Flutter existia.
 
+## Reversão de A1 — frontend fala direto com o Supabase (05/09/2026)
+
+Decisão do dono do projeto, na branch `feat/react-supabase`: **A1 caiu**. O
+`frontend/salao_web` não passa mais pelo FastAPI — fala direto com o Supabase pelo
+cliente `@supabase/supabase-js` (chave `anon`), módulo por módulo, na ordem **Auth →
+Resumo → Atendimentos → Gastos → Estoque → Kits → Perfil → Servicos → Alertas →
+Agendamento_publico**. Essa lista está **completa** — os dez módulos já migraram e
+foram verificados ponta a ponta contra o projeto Supabase real.
+
+- **RLS (`using (auth.uid() = user_id)`) é a fronteira de autorização agora**, não o
+  FastAPI. Nunca a chave `service_role` no cliente — só a `anon`, em `lib/supabase.ts`.
+- **Onde RLS não basta** (atomicidade de saldo, ou operação sem sessão que precisa
+  enxergar através da RLS), a regra vira função Postgres `security definer`, chamada
+  via `supabase.rpc(...)`: `ajustar_estoque` (`004_ajustar_estoque_rpc.sql`, saldo de
+  estoque/kit) e as três de `005_agendamento_publico_rpc.sql`
+  (`agendamento_publico_pagina/horarios/agendar` — o único módulo sem login, que
+  precisa ver nome do salão/tabela de preços/expediente sem `auth.uid()`, e travar com
+  `pg_advisory_xact_lock` para não deixar dois clientes públicos reservarem o mesmo
+  horário). Isso é o substituto direto do que o service role do FastAPI fazia — é
+  security definer, nunca `service_role` no cliente.
+- **`api/` (FastAPI) não tem mais consumidor.** Continua existindo — não foi apagado —
+  mas nenhum frontend fala com ele; sem trilha ativa enquanto essa decisão não for
+  revisitada. A "Trilha backend" e as dívidas de contrato descritas mais abaixo (§
+  "Dívidas conhecidas do backend") descrevem esse código parado, não um bloqueio atual.
+- Todo código/comentário deste arquivo que ainda diz "A1 vigente" ou "o frontend nunca
+  fala com o Supabase" está desatualizado — corrija ao encostar.
+
 ## Repositório
 
 ```
@@ -56,15 +83,18 @@ business-insights/
 │   ├── padrao-de-projeto-react.md # padrão do frontend atual (React) — trilha R0, fechada
 │   ├── endpoints-backend.md       # contrato: operações que o FastAPI deve expor (framework-agnóstico)
 │   └── pedidos-backend.md         # ordens de serviço da F4, em lotes L0–L8
-├── api/                           # FastAPI — o ÚNICO backend que qualquer frontend enxerga
+├── api/                           # FastAPI — sem consumidor desde a reversão de A1 (05/09/2026)
 ├── database/
-│   ├── schema.sql                 # Supabase/Postgres (estado antes da V1)
+│   ├── schema.sql                 # Supabase/Postgres (estado antes da V1, histórico)
 │   └── migrations/
-│       ├── 001_v1_completo.sql    # idempotente: tabelas novas + ajustes
-│       └── 002_seed_teste.sql     # dados de teste (NÃO rodar em produção)
+│       ├── 001_v1_completo.sql             # idempotente: tabelas novas + ajustes
+│       ├── 002_seed_teste.sql              # dados de teste (NÃO rodar em produção)
+│       ├── 003_agendamento_publico.sql     # slug, horario_funcionamento, origem
+│       ├── 004_ajustar_estoque_rpc.sql     # RPC security definer: saldo de estoque/kit
+│       └── 005_agendamento_publico_rpc.sql # RPCs security definer: link público
 ├── frontend/
 │   ├── salao_app/                 # Flutter — CONGELADO (04/09/2026), não desenvolver
-│   └── salao_web/                 # React — frontend atual, ainda sem código-fonte
+│   └── salao_web/                 # React — frontend atual, fala direto com o Supabase
 └── n8n/                           # automações (WhatsApp, cron, resumos)
 ```
 
@@ -81,7 +111,7 @@ congelado.
 
 | # | Decisão | Status | Consequência |
 |---|---|---|---|
-| **A1** | **Tudo via FastAPI.** Uma única `baseUrl`. O frontend **nunca** fala com o Supabase (nem PostgREST, nem RPC, nem SDK). | ✅ Vigente | O FastAPI tem CRUD, não só relatório. O mapa de endpoints é uma especificação de backend real, independente de Flutter ou React. Regra de negócio (baixa de estoque ao finalizar atendimento) mora no servidor. |
+| **A1** | **Tudo via FastAPI.** Uma única `baseUrl`. O frontend **nunca** fala com o Supabase (nem PostgREST, nem RPC, nem SDK). | ❌ Revertida (05/09/2026) | Ver "Reversão de A1" acima. O `salao_web` fala direto com o Supabase; RLS é a fronteira de autorização; regra que a RLS não cobre vira função `security definer`. O mapa de endpoints (`.specs/endpoints-backend.md`) e o FastAPI ficam como referência de contrato/histórico, sem consumidor. |
 | **A2** | **Módulo `auth` completo.** Login, token, interceptor 401, route guard. | ⚠️ Vale o conceito; implementação Flutter (`AppStorage`, interceptor Dio) está congelada | Em React precisa do equivalente: onde o token fica, como toda chamada autenticada reage a 401, como a rota protegida redireciona — a definir junto do padrão de projeto React. |
 | **A3** | **Alertas in-app + push agora; WhatsApp e e-mail só mapeados.** | ✅ Vigente | Badge, banner, central de alertas continuam necessários em React. Push depende de F5 (abaixo), hoje sem prioridade sem build nativo. Endpoints de WhatsApp/e-mail seguem *futuro* — n8n já tem fluxos prontos. |
 | **A4** | **`AppStorage` só sobre `SharedPreferences`.** | 🧊 Congelada (só Flutter) | Não se aplica a React. Equivalente (provavelmente `localStorage`, sem offline-first) fica para o padrão de projeto React. |
@@ -94,12 +124,13 @@ congelado.
 ### O que essas decisões apagam do estado atual
 
 - `api/README.md` e o docstring de `api/app/main.py` dizem "CRUD puro → Supabase REST
-  (frontend chama diretamente)". **Isso está morto por A1** — corrija quando encostar
-  nesses arquivos.
+  (frontend chama diretamente)". **Isso voltou a ser verdade com a reversão de A1** —
+  só que hoje é o `salao_web`, não um FastAPI de CRUD puro, quem chama direto. Corrija
+  a referência ao FastAPI quando encostar nesses arquivos.
 - O `schema.sql` foi desenhado para RLS com a *anon key* do Supabase, pensando num
-  cliente batendo direto. Com A1 quem bate é o FastAPI (service role). As policies de
-  RLS continuam valendo como segunda barreira, mas **a autorização passa a ser do
-  FastAPI**, derivada do token — nunca de um `user_id` que o cliente mande no corpo.
+  cliente batendo direto — **é exatamente o que o `salao_web` faz hoje**. RLS
+  (`auth.uid() = user_id`) é a autorização real, não uma segunda barreira atrás do
+  FastAPI.
 
 ## Padrão de projeto Flutter (congelado)
 
@@ -217,20 +248,25 @@ mesmo sem tocar mais no Flutter.
 ### Trilha React (nova, começando do zero)
 
 - [x] **R0 — Padrão de projeto.** Ver `.specs/padrao-de-projeto-react.md`.
-- [ ] **R1 — Infra.** Cliente HTTP com `baseUrl` única, tokens do design system
-      (Tailwind), layout responsivo (casca mobile/desktop), roteamento base.
-- [ ] **R2 — Módulo `auth`.** Primeira feature a subir, mesma razão do Flutter: valida
-      a arquitetura inteira (chamada HTTP, guard de rota, sessão) de uma vez.
-- [ ] **R3 — Demais módulos**, na mesma lista da seção Módulos, contra o contrato de
-      `.specs/endpoints-backend.md`.
+- [x] **R1 — Infra.** Cliente Supabase único (`lib/supabase.ts`), tokens do design
+      system (Tailwind), layout responsivo (casca mobile/desktop), roteamento base.
+- [x] **R2 — Módulo `auth`.**
+- [x] **R3 — Demais módulos**, todos migrados para falar direto com o Supabase (branch
+      `feat/react-supabase`), nesta ordem: Auth, Resumo, Atendimentos, Gastos, Estoque,
+      Kits, Perfil, Servicos, Alertas, Agendamento_publico. Cada um foi verificado ponta
+      a ponta contra o projeto Supabase real antes de passar para o próximo — ver
+      "Reversão de A1" acima. `.specs/endpoints-backend.md` vale como registro do
+      contrato de dados (nomes de campo, regras de negócio), não mais como endpoint a
+      implementar num backend HTTP.
 
-### Trilha backend (independente do frontend)
+### Trilha backend (congelada — sem consumidor desde a reversão de A1)
 
-- [ ] **F4 — Backend.** FastAPI implementando `.specs/endpoints-backend.md`, nos lotes
-      de `.specs/pedidos-backend.md`. O SQL já está escrito (`database/migrations/`)
-      mas **ainda não foi executado** no Supabase.
+- [ ] **F4 — Backend.** FastAPI implementando `.specs/endpoints-backend.md` ficou
+      inacabado e **não é mais o caminho** — o `salao_web` não passa mais por ele. As
+      dívidas conhecidas abaixo descrevem esse código parado; não são bloqueio de
+      frontend.
 
-### Dívidas conhecidas do backend, a resolver
+### Dívidas conhecidas do backend (histórico — código sem consumidor)
 
 - **Contrato de `gastos` diverge**: o app usa `forma_pagamento` ∈ {avista, credito,
   debito, pix} + `categoria` ∈ {material, fixo, outros}; o `schema.sql` usa
