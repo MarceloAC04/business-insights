@@ -45,7 +45,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatBRL, formatDateTime } from "@/lib/format";
+import { formatBRL, formatDateTime, formatMoedaInput, parseMoedaInput } from "@/lib/format";
 import { EstoqueApi } from "@/lib/api/estoque";
 import {
   textoDoErro,
@@ -196,7 +196,7 @@ function EstoquePage() {
   const abrirEntrada = (p: ItemEstoque) => {
     setEntradaItem(p);
     setQtd("1");
-    setCusto(String(p.custo_ultima_compra));
+    setCusto(formatMoedaInput(String(Math.round(p.custo_ultima_compra * 100))));
     setMotivo("Compra");
   };
 
@@ -210,7 +210,7 @@ function EstoquePage() {
   const confirmarEntrada = () => {
     if (!entradaItem) return;
     const quantidade = Number(qtd.replace(",", "."));
-    const custoUnitario = Number(custo.replace(",", "."));
+    const custoUnitario = parseMoedaInput(custo);
     if (!(quantidade > 0) || !(custoUnitario >= 0)) {
       toast.error("Informe quantidade e custo válidos.");
       return;
@@ -267,7 +267,7 @@ function EstoquePage() {
   const cadastrarItem = () => {
     const quantidade = Number(formItem.quantidade.replace(",", "."));
     const minimo = Number(formItem.minimo.replace(",", "."));
-    const custoUnitario = Number(formItem.custo.replace(",", "."));
+    const custoUnitario = parseMoedaInput(formItem.custo);
     if (!formItem.nome.trim() || !(custoUnitario >= 0) || !Number.isFinite(quantidade)) {
       toast.error("Informe nome, quantidade e custo do produto.");
       return;
@@ -352,7 +352,7 @@ function EstoquePage() {
   }, 0);
 
   const cadastrarKit = () => {
-    const preco = Number(formKit.precoVenda.replace(",", "."));
+    const preco = parseMoedaInput(formKit.precoVenda);
     if (!formKit.nome.trim() || !(preco > 0) || formKit.itens.length === 0) {
       toast.error("Informe nome, preço de venda e ao menos um insumo.");
       return;
@@ -401,7 +401,7 @@ function EstoquePage() {
   function confirmarVenda() {
     if (!kitParaVender) return;
     const quantidade = Number(qtdVenda);
-    const preco = Number(precoVenda.replace(",", "."));
+    const preco = parseMoedaInput(precoVenda);
     if (!(quantidade > 0)) {
       toast.error("Informe quantas unidades foram vendidas.");
       return;
@@ -597,7 +597,7 @@ function EstoquePage() {
                             onClick={() => {
                               setKitParaVender(k);
                               setQtdVenda("1");
-                              setPrecoVenda(String(k.preco_venda));
+                              setPrecoVenda(formatMoedaInput(String(Math.round(k.preco_venda * 100))));
                               setFormaVenda("pix");
                             }}
                           >
@@ -681,7 +681,7 @@ function EstoquePage() {
                 id="custo-entrada"
                 inputMode="decimal"
                 value={custo}
-                onChange={(e) => setCusto(e.target.value)}
+                onChange={(e) => setCusto(formatMoedaInput(e.target.value))}
               />
             </div>
             <div className="space-y-1.5 sm:col-span-2">
@@ -842,7 +842,7 @@ function EstoquePage() {
                   id="preco-venda"
                   inputMode="decimal"
                   value={precoVenda}
-                  onChange={(e) => setPrecoVenda(e.target.value)}
+                  onChange={(e) => setPrecoVenda(formatMoedaInput(e.target.value))}
                 />
               </div>
             </div>
@@ -971,7 +971,7 @@ function EstoquePage() {
                   id="custo-produto"
                   inputMode="decimal"
                   value={formItem.custo}
-                  onChange={(e) => setFormItem({ ...formItem, custo: e.target.value })}
+                  onChange={(e) => setFormItem({ ...formItem, custo: formatMoedaInput(e.target.value) })}
                   placeholder="0,00"
                 />
               </div>
@@ -1018,7 +1018,7 @@ function EstoquePage() {
                 id="preco-kit"
                 inputMode="decimal"
                 value={formKit.precoVenda}
-                onChange={(e) => setFormKit({ ...formKit, precoVenda: e.target.value })}
+                onChange={(e) => setFormKit({ ...formKit, precoVenda: formatMoedaInput(e.target.value) })}
                 placeholder="0,00"
               />
             </div>
@@ -1060,10 +1060,7 @@ function EstoquePage() {
               </div>
               <p className="text-xs text-muted-foreground">
                 Custo dos insumos: <Money value={custoFormKit} /> • Lucro por kit:{" "}
-                <Money
-                  value={(Number(formKit.precoVenda.replace(",", ".")) || 0) - custoFormKit}
-                  colorir
-                />
+                <Money value={parseMoedaInput(formKit.precoVenda) - custoFormKit} colorir />
               </p>
             </div>
           </div>
