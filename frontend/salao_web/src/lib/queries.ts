@@ -31,7 +31,6 @@ import {
   type ServicoBody,
 } from "./api";
 import { ApiError } from "./error-codes";
-import { AppStorage } from "./storage";
 import type { FormaPagamento, HorarioDia, Salao, StatusAtendimento, Usuario } from "./types";
 
 /**
@@ -115,11 +114,14 @@ export interface Sessao {
 }
 
 /**
- * Quem está logado, segundo o `AppStorage`.
+ * Quem está logado, segundo a sessão que o próprio Supabase Auth já persistiu
+ * (localStorage dele, não mais o `AppStorage`).
  *
  * Fica no cache do react-query em vez de num `useState` para que login e logout
  * atualizem o app inteiro de uma vez — o cabeçalho e o guard leem a mesma
- * chave.
+ * chave. `supabaseAuthListener` (registrado no `__root`) mantém essa chave em
+ * dia quando a sessão muda por fora de um `useLogin`/`useLogout` (ex.: refresh
+ * de token em outra aba, ou expiração).
  *
  * `data` é `undefined` na primeira renderização (inclusive no SSR, onde não há
  * `localStorage`): o guard espera esse ciclo antes de decidir, senão jogaria
@@ -128,8 +130,7 @@ export interface Sessao {
 export function useSessao() {
   return useQuery({
     queryKey: chaves.sessao(),
-    queryFn: (): Sessao | null =>
-      AppStorage.autenticado ? { usuario: AppStorage.usuario, salao: AppStorage.salao } : null,
+    queryFn: () => AuthApi.sessaoAtual(),
     staleTime: Infinity,
     retry: false,
   });
