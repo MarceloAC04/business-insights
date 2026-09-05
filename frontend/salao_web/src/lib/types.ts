@@ -209,6 +209,8 @@ export interface Servico {
   id: string;
   nome: string;
   preco: number;
+  /** Nulo até a usuária preencher (serviço antigo). Obrigatório em cadastro novo — base do agendamento público. */
+  duracao_minutos: number | null;
   produtos_padrao: ProdutoPadrao[];
 }
 

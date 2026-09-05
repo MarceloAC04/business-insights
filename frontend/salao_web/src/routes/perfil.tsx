@@ -112,6 +112,7 @@ interface FormServico {
   id?: string;
   nome: string;
   preco: string;
+  duracao: string;
   produtos: { item_estoque_id: string; quantidade: number }[];
 }
 
@@ -210,7 +211,7 @@ function PerfilPage() {
   const [custoParaExcluir, setCustoParaExcluir] = useState<CustoFixo | null>(null);
 
   const [aberto, setAberto] = useState(false);
-  const [form, setForm] = useState<FormServico>({ nome: "", preco: "", produtos: [] });
+  const [form, setForm] = useState<FormServico>({ nome: "", preco: "", duracao: "", produtos: [] });
   const [servicoParaExcluir, setServicoParaExcluir] = useState<Servico | null>(null);
 
   const itens = estoque?.itens ?? [];
@@ -286,7 +287,7 @@ function PerfilPage() {
   };
 
   const abrirNovoServico = () => {
-    setForm({ nome: "", preco: "", produtos: [] });
+    setForm({ nome: "", preco: "", duracao: "", produtos: [] });
     setAberto(true);
   };
 
@@ -294,7 +295,8 @@ function PerfilPage() {
     setForm({
       id: s.id,
       nome: s.nome,
-      preco: String(s.preco),
+      preco: formatMoedaInput(String(Math.round(s.preco * 100))),
+      duracao: s.duracao_minutos ? String(s.duracao_minutos) : "",
       produtos: s.produtos_padrao.map((p) => ({
         item_estoque_id: p.item_estoque_id,
         quantidade: p.quantidade,
@@ -304,14 +306,20 @@ function PerfilPage() {
   };
 
   const salvarServicoForm = () => {
-    const preco = Number(form.preco.replace(",", "."));
+    const preco = parseMoedaInput(form.preco);
+    const duracao_minutos = Number(form.duracao);
     if (!form.nome.trim() || !(preco > 0)) {
       toast.error("Informe o nome do serviço e um preço válido.");
+      return;
+    }
+    if (!(duracao_minutos > 0)) {
+      toast.error("Informe a duração do serviço em minutos.");
       return;
     }
     const body = {
       nome: form.nome.trim(),
       preco,
+      duracao_minutos,
       produtos_padrao: form.produtos,
     };
     const feito = {
@@ -745,15 +753,27 @@ function PerfilPage() {
                 placeholder="Ex.: extensão de cílios"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="preco-servico">Preço (R$)</Label>
-              <Input
-                id="preco-servico"
-                inputMode="decimal"
-                value={form.preco}
-                onChange={(e) => setForm({ ...form, preco: e.target.value })}
-                placeholder="0,00"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="preco-servico">Preço (R$)</Label>
+                <Input
+                  id="preco-servico"
+                  inputMode="decimal"
+                  value={form.preco}
+                  onChange={(e) => setForm({ ...form, preco: formatMoedaInput(e.target.value) })}
+                  placeholder="0,00"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="duracao-servico">Duração (min)</Label>
+                <Input
+                  id="duracao-servico"
+                  inputMode="numeric"
+                  value={form.duracao}
+                  onChange={(e) => setForm({ ...form, duracao: e.target.value.replace(/\D/g, "") })}
+                  placeholder="Ex.: 60"
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <Label>Insumos padrão</Label>
