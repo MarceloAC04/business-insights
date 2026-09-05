@@ -1,5 +1,5 @@
 -- ================================================================
--- MIGRATION 004 — RPCs do agendamento público (lote L8, complemento)
+-- MIGRATION 005 — RPCs do agendamento público (lote L8, complemento)
 -- Salon App · gerado a partir de .specs/endpoints-backend.md §10
 -- ================================================================
 --
