@@ -26,7 +26,7 @@ const NAV = [
 ] as const;
 
 /** Para onde o alerta leva. O servidor manda a referência; a rota é do app. */
-export type RotaAlerta = "/estoque" | "/gastos" | "/perfil" | "/alertas";
+export type RotaAlerta = "/estoque" | "/gastos" | "/perfil" | "/atendimentos" | "/alertas";
 
 export function rotaDoAlerta(alerta: Alerta): RotaAlerta {
   switch (alerta.referencia_tipo) {
@@ -36,6 +36,8 @@ export function rotaDoAlerta(alerta: Alerta): RotaAlerta {
       return "/gastos";
     case "custo_fixo":
       return "/perfil";
+    case "atendimento":
+      return "/atendimentos";
     default:
       return "/alertas";
   }

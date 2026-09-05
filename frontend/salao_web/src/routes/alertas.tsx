@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   BellOff,
+  CalendarCheck,
   CalendarClock,
   CheckCheck,
   Package,
@@ -50,9 +51,10 @@ export const Route = createFileRoute("/alertas")({
 });
 
 /**
- * Os nove tipos do §9 do contrato. Quem classifica é o servidor — a tela só
- * escolhe ícone e cor, e verde/vermelho seguem a leitura financeira do
- * protótipo.
+ * Os dez tipos do §9 do contrato (nove originais + `agendamento_publico_novo`,
+ * acrescentado pela migração 003 junto do link de agendamento, §10). Quem
+ * classifica é o servidor — a tela só escolhe ícone e cor, e verde/vermelho
+ * seguem a leitura financeira do protótipo.
  */
 const config: Record<TipoAlerta, { rotulo: string; tone: BadgeTone; icone: typeof Package }> = {
   estoque_negativo: { rotulo: "Estoque negativo", tone: "negative", icone: TriangleAlert },
@@ -64,6 +66,7 @@ const config: Record<TipoAlerta, { rotulo: string; tone: BadgeTone; icone: typeo
   custo_fixo_a_vencer: { rotulo: "Custo fixo a vencer", tone: "warning", icone: CalendarClock },
   saldo_negativo: { rotulo: "Mês no vermelho", tone: "negative", icone: TrendingDown },
   zero_a_zero: { rotulo: "Zero a zero", tone: "brand", icone: TrendingDown },
+  agendamento_publico_novo: { rotulo: "Agendamento pelo link", tone: "brand", icone: CalendarCheck },
 };
 
 function AlertasPage() {
