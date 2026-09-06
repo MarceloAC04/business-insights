@@ -1,12 +1,15 @@
 """
-Router: /relatorio
+Router: /resumo
 
 Endpoints de consolidação e relatório — a única coisa que mora aqui
 é lógica que o Supabase não consegue fazer sozinho: agregações
 com múltiplas tabelas, regras de negócio e disparo de alertas.
 
 CRUD puro (criar/editar/apagar atendimento, gasto, etc.) fica
-no Supabase REST API — o Flutter chama diretamente.
+no Supabase REST API — qualquer frontend chama diretamente.
+
+Renomeado de `/relatorio` para `/resumo` (.specs/00-ENTREGA-BACKEND.md § resumo)
+— o path antigo não tem mais consumidor.
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -18,7 +21,7 @@ from app.schemas.relatorio import ResumoMensal
 from app.services.relatorio_service import calcular_resumo_mensal
 from app.services.webhook_service import notificar_alerta_saldo
 
-router = APIRouter(prefix="/relatorio", tags=["Relatório"])
+router = APIRouter(prefix="/resumo", tags=["Resumo"])
 
 # A extração de user_id agora é feita por `usuario_atual` (app/core/security.py),
 # que VALIDA a assinatura do JWT com SUPABASE_JWT_SECRET antes de confiar no `sub`.

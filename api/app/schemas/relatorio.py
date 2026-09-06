@@ -16,6 +16,10 @@ class ServicoRanking(BaseModel):
     nome: str
     quantidade: int
     total_receita: float
+    lucro: float = Field(
+        default=0.0,
+        description="total_receita rateado do custo de insumos do mês, proporcional à receita",
+    )
 
 
 class ResumoReceita(BaseModel):
@@ -23,23 +27,56 @@ class ResumoReceita(BaseModel):
     total_insumos: float = Field(description="Soma dos insumos descartáveis usados")
     liquido_atendimentos: float = Field(description="total_servicos - total_insumos")
     quantidade_atendimentos: int
+    total_kits: float = Field(default=0.0, description="Receita de kits vendidos no mês")
+    quantidade_kits_vendidos: int = Field(default=0)
+    custo_kits_vendidos: float = Field(
+        default=0.0,
+        description="Informativo — já saiu quando o insumo do kit foi comprado, não entra em `saiu` de novo",
+    )
     servicos_mais_realizados: list[ServicoRanking]
 
 
 class ResumoGastos(BaseModel):
-    total_custos_fixos: float = Field(description="Soma dos custos fixos mensais cadastrados no perfil")
-    total_gastos_variaveis: float = Field(description="Soma dos gastos registrados no mês")
+    total_custos_fixos: float = Field(description="Soma dos custos fixos cadastrados até o fim do mês")
+    total_gastos_variaveis: float = Field(description="Soma dos gastos de categoria != fixo no mês")
     total_saiu: float = Field(description="total_custos_fixos + total_gastos_variaveis")
+
+
+class PontoHistorico(BaseModel):
+    ano: int
+    mes: int
+    receitas: float
+    despesas: float
+
+
+class ServicoMaisLucrativo(BaseModel):
+    nome: str
+    lucro: float
+
+
+class ResumoInsights(BaseModel):
+    ticket_medio: float = Field(description="total_servicos / quantidade_atendimentos (kit não entra)")
+    margem_lucro_percentual: float = Field(description="(saldo_final / entrou) × 100")
+    variacao_percentual_mes_anterior: float
+    saldo_mes_anterior: float
+    servico_mais_lucrativo: Optional[ServicoMaisLucrativo] = None
 
 
 class ResumoMensal(BaseModel):
     ano: int
     mes: int
+    saldo_final: float = Field(description="entrou - saiu")
+    entrou: float = Field(description="total_servicos + total_kits")
+    saiu: float = Field(description="total_custos_fixos + total_gastos_variaveis")
+    meta_faturamento_mensal: float
+    historico_seis_meses: list[PontoHistorico] = Field(
+        description="Seis pontos cronológicos terminando no mês pedido, inclusive meses zerados"
+    )
     receita: ResumoReceita
     gastos: ResumoGastos
-    saldo_final: float = Field(description="liquido_atendimentos - total_saiu")
+    insights: ResumoInsights
     alerta_zero_a_zero: bool = Field(
-        description="True quando saldo_final < 100 — sinaliza para o Flutter exibir aviso de precificação"
+        description="entrou > 0 e 0 <= saldo_final < limite_saldo_alerta da usuária"
     )
 
 
@@ -57,10 +94,10 @@ class FiltroPrecificacao(BaseModel):
         description="Quanto a proprietária quer ganhar por hora de trabalho (R$)"
     )
     percentual_overhead: float = Field(
-        default=0.30,
+        default=0.15,
         ge=0,
         le=1,
-        description="Fração dos custos fixos alocada neste serviço (padrão 30%)"
+        description="Fração dos custos fixos alocada neste serviço (padrão 15% — mesmo default do app, não enviado explicitamente pela tela)"
     )
     percentual_lucro: float = Field(
         default=0.20,
