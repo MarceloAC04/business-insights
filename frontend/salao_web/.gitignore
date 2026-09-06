@@ -20,6 +20,9 @@ dist-ssr
 .wrangler/
 .dev.vars
 
+# Firebase Hosting (deploy cache local, gerado por `firebase deploy`)
+.firebase/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

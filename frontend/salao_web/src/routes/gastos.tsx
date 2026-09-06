@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { GastoBody } from "@/lib/api";
-import { formatBRL, formatDate, MESES, nomeMes } from "@/lib/format";
+import { formatBRL, formatDate, formatMoedaInput, MESES, nomeMes, parseMoedaInput } from "@/lib/format";
 import {
   textoDoErro,
   useCriarGasto,
@@ -179,7 +179,7 @@ function GastosPage() {
       id: g.id,
       nome: g.nome,
       categoria: g.categoria,
-      valor: String(g.valor),
+      valor: formatMoedaInput(String(Math.round(g.valor * 100))),
       prazo: g.prazo_pagamento.slice(0, 10),
       forma: g.forma_pagamento,
     });
@@ -187,7 +187,7 @@ function GastosPage() {
   };
 
   const salvar = () => {
-    const valor = Number(form.valor.replace(",", "."));
+    const valor = parseMoedaInput(form.valor);
     if (!form.nome.trim() || !Number.isFinite(valor) || valor <= 0) {
       toast.error("Informe uma descrição e um valor válido.");
       return;
@@ -385,7 +385,7 @@ function GastosPage() {
                   id="valor"
                   inputMode="decimal"
                   value={form.valor}
-                  onChange={(e) => setForm({ ...form, valor: e.target.value })}
+                  onChange={(e) => setForm({ ...form, valor: formatMoedaInput(e.target.value) })}
                   placeholder="0,00"
                 />
               </div>

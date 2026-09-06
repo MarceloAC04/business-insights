@@ -150,6 +150,11 @@ create table if not exists estoque_itens (
   ) stored
 );
 
+-- `estoque_itens` já existia neste banco sem esta coluna (versão anterior da
+-- tabela, de antes da bipagem existir) — o `create table if not exists` acima
+-- não adiciona coluna em tabela que já existe, só a `alter` faz isso.
+alter table estoque_itens add column if not exists codigo_barras text;
+
 drop trigger if exists trg_estoque_itens_atualizado on estoque_itens;
 create trigger trg_estoque_itens_atualizado
   before update on estoque_itens
@@ -499,14 +504,32 @@ create table if not exists refresh_tokens (
 -- tela vazia por falta de uma linha que o sistema podia ter criado.
 -- Definida aqui, e não na §1, porque depende de alerta_preferencias.
 
+-- `slug_agendamento` só existe depois da migração 003 (agendamento público,
+-- decisão B1) — mas nesta base ela já pode ter rodado antes desta (foi o que
+-- aconteceu no banco real). Sem o `if tem_slug`, inserir sem a coluna vira
+-- `null` e quebra o `not null` que 003 já deixou lá. Detecta em vez de supor
+-- ordem — assim 001 fica idempotente nos dois sentidos.
 create or replace function criar_perfil_ao_cadastrar()
 returns trigger language plpgsql security definer
 set search_path = public
 as $fn$
+declare
+  tem_slug boolean;
 begin
-  insert into public.perfil_salao (user_id, email)
-  values (new.id, new.email)
-  on conflict (user_id) do nothing;
+  select exists (
+    select 1 from information_schema.columns
+    where table_name = 'perfil_salao' and column_name = 'slug_agendamento'
+  ) into tem_slug;
+
+  if tem_slug then
+    insert into public.perfil_salao (user_id, email, slug_agendamento)
+    values (new.id, new.email, 'salao-' || substr(new.id::text, 1, 8))
+    on conflict (user_id) do nothing;
+  else
+    insert into public.perfil_salao (user_id, email)
+    values (new.id, new.email)
+    on conflict (user_id) do nothing;
+  end if;
 
   insert into public.alerta_preferencias (user_id)
   values (new.id)
@@ -521,10 +544,29 @@ create trigger trg_criar_perfil_novo_usuario
   after insert on auth.users
   for each row execute function criar_perfil_ao_cadastrar();
 
--- Retroativo: quem já existe também ganha as duas linhas.
-insert into perfil_salao (user_id, email)
-  select id, email from auth.users
-  on conflict (user_id) do nothing;
+-- Retroativo: quem já existe também ganha as duas linhas. Mesmo cuidado do
+-- `tem_slug` acima — sem ele, qualquer usuária sem perfil ainda (como a
+-- de teste) quebra o `insert` ao tentar gravar `slug_agendamento` nulo.
+do $mig$
+declare
+  tem_slug boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_name = 'perfil_salao' and column_name = 'slug_agendamento'
+  ) into tem_slug;
+
+  if tem_slug then
+    insert into perfil_salao (user_id, email, slug_agendamento)
+      select u.id, u.email, 'salao-' || substr(u.id::text, 1, 8)
+      from auth.users u
+      on conflict (user_id) do nothing;
+  else
+    insert into perfil_salao (user_id, email)
+      select id, email from auth.users
+      on conflict (user_id) do nothing;
+  end if;
+end $mig$;
 
 insert into alerta_preferencias (user_id)
   select id from auth.users

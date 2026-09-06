@@ -10,7 +10,8 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import { Toaster } from "@/components/ui/sonner";
-import { registrarExpiracaoDeSessao } from "@/lib/http";
+import { chaves } from "@/lib/queries";
+import { supabase } from "@/lib/supabase";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
@@ -134,14 +135,20 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
 
-  // Quando o refresh falha, o transporte já limpou o `AppStorage`; falta o app
-  // reagir. O cache do react-query guarda dados da sessão que caiu, então some
-  // junto — senão a próxima usuária veria o resumo da anterior por um instante.
+  // Auth mora no Supabase (branch feat/react-supabase): a sessão pode mudar
+  // por fora de um useLogin/useLogout (token renovado sozinho, ou expirado de
+  // verdade) — este listener é quem mantém a chave `sessao` do react-query em
+  // dia nesses casos, e devolve pro login quando o Supabase encerra a sessão.
   useEffect(() => {
-    registrarExpiracaoDeSessao(() => {
-      queryClient.clear();
-      void router.navigate({ to: "/login" });
+    const { data: assinatura } = supabase.auth.onAuthStateChange((evento) => {
+      if (evento === "SIGNED_OUT") {
+        queryClient.clear();
+        void router.navigate({ to: "/login" });
+      } else if (evento === "SIGNED_IN" || evento === "TOKEN_REFRESHED") {
+        void queryClient.invalidateQueries({ queryKey: chaves.sessao() });
+      }
     });
+    return () => assinatura.subscription.unsubscribe();
   }, [queryClient, router]);
 
   return (

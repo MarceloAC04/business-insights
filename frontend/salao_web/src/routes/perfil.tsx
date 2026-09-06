@@ -48,7 +48,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatBRL, nomeMes } from "@/lib/format";
+import { formatBRL, formatMoedaInput, formatTelefone, nomeMes, parseMoedaInput } from "@/lib/format";
 import {
   textoDoErro,
   useCriarCustoFixo,
@@ -112,6 +112,7 @@ interface FormServico {
   id?: string;
   nome: string;
   preco: string;
+  duracao: string;
   produtos: { item_estoque_id: string; quantidade: number }[];
 }
 
@@ -200,8 +201,8 @@ function PerfilPage() {
     setPerfil({
       nome: s.nome,
       proprietaria: s.proprietaria,
-      telefone: s.telefone_whatsapp ?? "",
-      meta: String(s.meta_faturamento_mensal),
+      telefone: formatTelefone(s.telefone_whatsapp ?? ""),
+      meta: formatMoedaInput(String(Math.round(s.meta_faturamento_mensal * 100))),
     });
   }, [perfilServidor]);
 
@@ -210,7 +211,7 @@ function PerfilPage() {
   const [custoParaExcluir, setCustoParaExcluir] = useState<CustoFixo | null>(null);
 
   const [aberto, setAberto] = useState(false);
-  const [form, setForm] = useState<FormServico>({ nome: "", preco: "", produtos: [] });
+  const [form, setForm] = useState<FormServico>({ nome: "", preco: "", duracao: "", produtos: [] });
   const [servicoParaExcluir, setServicoParaExcluir] = useState<Servico | null>(null);
 
   const itens = estoque?.itens ?? [];
@@ -224,7 +225,7 @@ function PerfilPage() {
     }, 0);
 
   const salvarDados = () => {
-    const meta = Number(perfil.meta.replace(",", "."));
+    const meta = parseMoedaInput(perfil.meta);
     if (!perfil.nome.trim() || !perfil.proprietaria.trim()) {
       toast.error("Informe o nome do salão e da profissional.");
       return;
@@ -234,7 +235,7 @@ function PerfilPage() {
         nome: perfil.nome.trim(),
         proprietaria: perfil.proprietaria.trim(),
         telefone_whatsapp: perfil.telefone.trim() || null,
-        meta_faturamento_mensal: Number.isFinite(meta) ? meta : 0,
+        meta_faturamento_mensal: meta,
       },
       {
         onSuccess: () => toast.success("Dados salvos."),
@@ -244,7 +245,7 @@ function PerfilPage() {
   };
 
   const cadastrarCusto = () => {
-    const valor = Number(formCusto.valor.replace(",", "."));
+    const valor = parseMoedaInput(formCusto.valor);
     const dia = Number(formCusto.dia);
     if (!formCusto.descricao.trim() || !(valor > 0) || !(dia >= 1 && dia <= 31)) {
       toast.error("Informe descrição, valor e um dia de vencimento entre 1 e 31.");
@@ -286,7 +287,7 @@ function PerfilPage() {
   };
 
   const abrirNovoServico = () => {
-    setForm({ nome: "", preco: "", produtos: [] });
+    setForm({ nome: "", preco: "", duracao: "", produtos: [] });
     setAberto(true);
   };
 
@@ -294,7 +295,8 @@ function PerfilPage() {
     setForm({
       id: s.id,
       nome: s.nome,
-      preco: String(s.preco),
+      preco: formatMoedaInput(String(Math.round(s.preco * 100))),
+      duracao: s.duracao_minutos ? String(s.duracao_minutos) : "",
       produtos: s.produtos_padrao.map((p) => ({
         item_estoque_id: p.item_estoque_id,
         quantidade: p.quantidade,
@@ -304,14 +306,20 @@ function PerfilPage() {
   };
 
   const salvarServicoForm = () => {
-    const preco = Number(form.preco.replace(",", "."));
+    const preco = parseMoedaInput(form.preco);
+    const duracao_minutos = Number(form.duracao);
     if (!form.nome.trim() || !(preco > 0)) {
       toast.error("Informe o nome do serviço e um preço válido.");
+      return;
+    }
+    if (!(duracao_minutos > 0)) {
+      toast.error("Informe a duração do serviço em minutos.");
       return;
     }
     const body = {
       nome: form.nome.trim(),
       preco,
+      duracao_minutos,
       produtos_padrao: form.produtos,
     };
     const feito = {
@@ -419,7 +427,7 @@ function PerfilPage() {
                     <Input
                       id="telefone"
                       value={perfil.telefone}
-                      onChange={(e) => setPerfil({ ...perfil, telefone: e.target.value })}
+                      onChange={(e) => setPerfil({ ...perfil, telefone: formatTelefone(e.target.value) })}
                       placeholder="(00) 00000-0000"
                     />
                   </div>
@@ -429,7 +437,8 @@ function PerfilPage() {
                       id="meta-fat"
                       inputMode="decimal"
                       value={perfil.meta}
-                      onChange={(e) => setPerfil({ ...perfil, meta: e.target.value })}
+                      onChange={(e) => setPerfil({ ...perfil, meta: formatMoedaInput(e.target.value) })}
+                      placeholder="0,00"
                     />
                   </div>
                 </div>
@@ -695,7 +704,7 @@ function PerfilPage() {
                   id="valor-custo"
                   inputMode="decimal"
                   value={formCusto.valor}
-                  onChange={(e) => setFormCusto({ ...formCusto, valor: e.target.value })}
+                  onChange={(e) => setFormCusto({ ...formCusto, valor: formatMoedaInput(e.target.value) })}
                   placeholder="0,00"
                 />
               </div>
@@ -744,15 +753,27 @@ function PerfilPage() {
                 placeholder="Ex.: extensão de cílios"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="preco-servico">Preço (R$)</Label>
-              <Input
-                id="preco-servico"
-                inputMode="decimal"
-                value={form.preco}
-                onChange={(e) => setForm({ ...form, preco: e.target.value })}
-                placeholder="0,00"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="preco-servico">Preço (R$)</Label>
+                <Input
+                  id="preco-servico"
+                  inputMode="decimal"
+                  value={form.preco}
+                  onChange={(e) => setForm({ ...form, preco: formatMoedaInput(e.target.value) })}
+                  placeholder="0,00"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="duracao-servico">Duração (min)</Label>
+                <Input
+                  id="duracao-servico"
+                  inputMode="numeric"
+                  value={form.duracao}
+                  onChange={(e) => setForm({ ...form, duracao: e.target.value.replace(/\D/g, "") })}
+                  placeholder="Ex.: 60"
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <Label>Insumos padrão</Label>

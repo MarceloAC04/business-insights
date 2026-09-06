@@ -88,6 +88,7 @@ interface ServicoRow {
   id: string;
   nome: string;
   preco: number;
+  duracao_minutos: number | null;
   produtos_padrao: ProdutoPadrao[];
 }
 
@@ -1032,6 +1033,7 @@ export class DemoDatabase {
       id: this.novoId("servico"),
       nome: texto(body, "nome"),
       preco: numero(body, "preco"),
+      duracao_minutos: numero(body, "duracao_minutos"),
       produtos_padrao: this.produtosPadrao(body),
     });
     return this.vazio();
@@ -1043,6 +1045,7 @@ export class DemoDatabase {
 
     servico.nome = texto(body, "nome");
     servico.preco = numero(body, "preco");
+    servico.duracao_minutos = numero(body, "duracao_minutos", servico.duracao_minutos ?? 0);
     servico.produtos_padrao = this.produtosPadrao(body);
     return this.vazio();
   }
@@ -1502,18 +1505,21 @@ export class DemoDatabase {
         id: this.novoId("servico"),
         nome: "Extensão de cílios",
         preco: 180,
+        duracao_minutos: 120,
         produtos_padrao: [produto(fio, 1), produto(cola, 1), produto(micropore, 2)],
       },
       {
         id: this.novoId("servico"),
         nome: "Manutenção de cílios",
         preco: 100,
+        duracao_minutos: 60,
         produtos_padrao: [],
       },
       {
         id: this.novoId("servico"),
         nome: "Sobrancelha fio a fio",
         preco: 120,
+        duracao_minutos: 45,
         produtos_padrao: [],
       },
     );

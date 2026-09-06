@@ -18,6 +18,7 @@ export const AppErrorCodes = {
   expenseAlreadyPaid: "GASTO_JA_PAGO",
   rateLimited: "LIMITE_EXCEDIDO",
   barcodeAlreadyUsed: "CODIGO_BARRAS_JA_CADASTRADO",
+  slotUnavailable: "HORARIO_INDISPONIVEL",
 } as const;
 
 export type AppErrorCode = (typeof AppErrorCodes)[keyof typeof AppErrorCodes];
@@ -37,6 +38,7 @@ const MENSAGENS: Record<string, string> = {
   [AppErrorCodes.expenseAlreadyPaid]: "Esse gasto já está pago.",
   [AppErrorCodes.rateLimited]: "Muitas tentativas. Espere um pouco.",
   [AppErrorCodes.barcodeAlreadyUsed]: "Esse código de barras já está em uso por outro item.",
+  [AppErrorCodes.slotUnavailable]: "Esse horário acabou de ser preenchido. Escolha outro.",
 };
 
 /**

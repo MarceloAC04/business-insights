@@ -39,9 +39,10 @@ export type TipoAlerta =
   | "custo_fixo_a_vencer"
   | "custo_fixo_vencido"
   | "saldo_negativo"
-  | "zero_a_zero";
+  | "zero_a_zero"
+  | "agendamento_publico_novo";
 
-export type ReferenciaAlerta = "estoque_item" | "gasto" | "custo_fixo" | null;
+export type ReferenciaAlerta = "estoque_item" | "gasto" | "custo_fixo" | "atendimento" | null;
 
 // ── auth ─────────────────────────────────────────────────────────────────────
 
@@ -209,6 +210,8 @@ export interface Servico {
   id: string;
   nome: string;
   preco: number;
+  /** Nulo até a usuária preencher (serviço antigo). Obrigatório em cadastro novo — base do agendamento público. */
+  duracao_minutos: number | null;
   produtos_padrao: ProdutoPadrao[];
 }
 

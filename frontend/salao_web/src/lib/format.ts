@@ -73,6 +73,28 @@ export function formatHora(value: string): string {
 }
 
 /**
+ * Máscara de valor em reais, digitando como centavos (padrão de app de banco):
+ * cada dígito novo entra pela direita — "1234" vira "12,34", "500" vira "5,00".
+ * Usar em todo campo de valor monetário, para a usuária não precisar acertar
+ * vírgula/ponto sozinha.
+ */
+export function formatMoedaInput(value: string): string {
+  const digitos = value.replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+  if (digitos.length === 0) return "";
+  const centavos = digitos.padStart(3, "0");
+  const inteiro = centavos.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const decimal = centavos.slice(-2);
+  return `${inteiro},${decimal}`;
+}
+
+/** Desfaz `formatMoedaInput`: "1.234,56" → `1234.56` (number). "" → 0. */
+export function parseMoedaInput(value: string): number {
+  if (value.trim() === "") return 0;
+  const numero = Number(value.replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(numero) ? numero : 0;
+}
+
+/**
  * Máscara de telefone BR: aceita só dígitos, limita a 11 (DDD + 9 dígitos) e
  * formata como "(11) 90000-0000" (celular) ou "(11) 0000-0000" (fixo).
  */
