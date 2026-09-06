@@ -27,6 +27,7 @@ from app.routers import (
     atendimentos,
     servicos,
     estoque,
+    kits,
     gastos,
     alertas,
 )
@@ -78,6 +79,7 @@ app.include_router(agendamento_publico.router, prefix=router_prefix)
 app.include_router(atendimentos.router, prefix=router_prefix)
 app.include_router(servicos.router, prefix=router_prefix)
 app.include_router(estoque.router, prefix=router_prefix)
+app.include_router(kits.router, prefix=router_prefix)
 app.include_router(gastos.router, prefix=router_prefix)
 app.include_router(alertas.router, prefix=router_prefix)
 
