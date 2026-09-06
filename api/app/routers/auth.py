@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from supabase import Client
 
 from app.core.supabase_client import get_supabase, get_supabase_auth, row, rows
-from app.core.security import usuario_atual
+from app.core.security import usuario_atual, token_atual
 from app.schemas.auth import (
     LoginRequest,
     RefreshRequest,
@@ -124,11 +124,18 @@ def refresh(
     summary="Invalida a sessão corrente",
 )
 def logout(
-    user_id: str = Depends(usuario_atual),
+    token: str = Depends(token_atual),
     supabase_auth: Client = Depends(get_supabase_auth),
 ):
+    # `supabase_auth.auth.sign_out()` (sem argumento) só revoga sessão quando
+    # o PRÓPRIO cliente que a chama tem uma sessão ativa (via `set_session`);
+    # `get_supabase_auth()` devolve um cliente novo a cada requisição, sem
+    # nenhuma sessão setada — `sign_out()` nele é um no-op silencioso (não
+    # lança erro, só não revoga nada). `auth.admin.sign_out(jwt, scope)` faz a
+    # chamada direto com o token que veio no header, sem depender de estado
+    # de sessão no cliente — é o que revoga de verdade.
     try:
-        supabase_auth.auth.sign_out()
+        supabase_auth.auth.admin.sign_out(token, "global")
     except Exception:
         # Logout é best-effort — mesmo se a revogação no Supabase falhar,
         # o app já descarta o token localmente.

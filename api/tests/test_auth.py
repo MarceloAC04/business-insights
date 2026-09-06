@@ -196,6 +196,28 @@ class TestAuthEndpoints:
             data = response.json()
             assert data["mensagem"] == "ok"
             assert data["total"] == 0
+            # Regressão: `sign_out()` sem argumento é no-op num cliente novo
+            # por requisição (sem sessão setada nele) — precisa ser
+            # `admin.sign_out(token, scope)` com o JWT do header, senão o
+            # refresh token da usuária nunca é revogado de verdade.
+            mock_sb_auth.auth.admin.sign_out.assert_called_once_with(valid_jwt_token, "global")
+            mock_sb_auth.auth.sign_out.assert_not_called()
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_logout_endpoint_revogacao_falha_nao_quebra(self, client, valid_jwt_token):
+        """Logout é best-effort: se o Supabase recusar a revogação, o endpoint
+        ainda responde 200 (o app descarta o token localmente de qualquer jeito)."""
+        mock_sb_auth = MagicMock()
+        mock_sb_auth.auth.admin.sign_out.side_effect = Exception("boom")
+        app.dependency_overrides[get_supabase_auth] = lambda: mock_sb_auth
+
+        try:
+            response = client.post(
+                "/v1/auth/logout",
+                headers={"Authorization": f"Bearer {valid_jwt_token}"},
+            )
+            assert response.status_code == 200
         finally:
             app.dependency_overrides.clear()
 

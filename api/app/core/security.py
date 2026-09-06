@@ -87,15 +87,10 @@ def _decodificar_token(token: str) -> dict:
         )
 
 
-def usuario_atual(
-    credenciais: HTTPAuthorizationCredentials | str | None = Depends(_bearer_scheme),
-    authorization: str | None = Header(default=None),
+def _extrair_token(
+    credenciais: HTTPAuthorizationCredentials | str | None,
+    authorization: str | None,
 ) -> str:
-    """
-    Dependency usada por TODO endpoint autenticado. Retorna o user_id (uuid, string)
-    extraído e VALIDADO do JWT. Nunca leia user_id do corpo ou da query — se um
-    endpoint aceitar isso, é falha de servidor (ver endpoints-backend.md §0).
-    """
     token: str | None = None
     if isinstance(credenciais, HTTPAuthorizationCredentials):
         token = credenciais.credentials.strip()
@@ -109,7 +104,19 @@ def usuario_atual(
             status_code=401,
             detail={"codigo": "AUTH_TOKEN_AUSENTE", "mensagem": "Token de autorização ausente"},
         )
+    return token
 
+
+def usuario_atual(
+    credenciais: HTTPAuthorizationCredentials | str | None = Depends(_bearer_scheme),
+    authorization: str | None = Header(default=None),
+) -> str:
+    """
+    Dependency usada por TODO endpoint autenticado. Retorna o user_id (uuid, string)
+    extraído e VALIDADO do JWT. Nunca leia user_id do corpo ou da query — se um
+    endpoint aceitar isso, é falha de servidor (ver endpoints-backend.md §0).
+    """
+    token = _extrair_token(credenciais, authorization)
     payload = _decodificar_token(token)
 
     user_id = payload.get("sub")
@@ -119,3 +126,18 @@ def usuario_atual(
             detail={"codigo": "AUTH_TOKEN_AUSENTE", "mensagem": "Token sem identificador de usuária"},
         )
     return user_id
+
+
+def token_atual(
+    credenciais: HTTPAuthorizationCredentials | str | None = Depends(_bearer_scheme),
+    authorization: str | None = Header(default=None),
+) -> str:
+    """
+    Dependency que devolve o JWT bruto, já validado (assinatura + expiração),
+    para os poucos casos que precisam repassá-lo ao Supabase Auth em vez de só
+    o user_id — hoje só `POST /auth/logout`, que precisa do token pra revogar
+    a sessão via `auth.admin.sign_out` (ver comentário em `routers/auth.py`).
+    """
+    token = _extrair_token(credenciais, authorization)
+    _decodificar_token(token)
+    return token
