@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.security import usuario_atual
 from app.core.supabase_client import get_supabase
+from app.services import alertas_service
 
 
 TEST_USER_ID = str(uuid.uuid4())
@@ -176,3 +177,35 @@ class TestAlertasEndpoints:
             assert data["result"]["plataforma"] == "android"
         finally:
             app.dependency_overrides.clear()
+
+
+class TestAlertasEscopoPorUsuario:
+    def test_marcar_alerta_lido_filtra_por_user_id_no_update(self):
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.update.return_value = mock_table
+
+        alerta_atualizado = {
+            "id": TEST_ALERTA_ID,
+            "tipo": "estoque_critico",
+            "severidade": "critico",
+            "titulo": "Cola adesiva acabou",
+            "mensagem": "Você está com 0 un.",
+            "referencia_tipo": "estoque_item",
+            "referencia_id": str(uuid.uuid4()),
+            "lido_em": "2026-09-01T09:00:00Z",
+            "criado_em": "2026-09-01T08:00:00-03:00",
+        }
+        mock_table.execute.side_effect = [
+            MagicMock(data=[{"id": TEST_ALERTA_ID}]),  # select antes (checagem)
+            MagicMock(data=[]),                        # update
+            MagicMock(data=[alerta_atualizado]),        # select depois
+        ]
+        mock_sb.table.return_value = mock_table
+
+        alertas_service.marcar_alerta_lido(mock_sb, TEST_USER_ID, TEST_ALERTA_ID)
+
+        eq_calls = [c.args for c in mock_table.eq.call_args_list]
+        assert ("user_id", TEST_USER_ID) in eq_calls

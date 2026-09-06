@@ -95,7 +95,7 @@ def marcar_alerta_lido(supabase: Client, user_id: str, alerta_id: str) -> Alerta
         )
 
     agora_iso = datetime.now(timezone.utc).isoformat()
-    supabase.table("alertas").update({"lido_em": agora_iso}).eq("id", alerta_id).execute()
+    supabase.table("alertas").update({"lido_em": agora_iso}).eq("id", alerta_id).eq("user_id", user_id).execute()
 
     resp_atualizada = (
         supabase.table("alertas")
