@@ -9,6 +9,30 @@ from app.schemas.estoque import ItemIn, ItemPatchIn, MovimentacaoIn
 _CAMPOS_ITEM = "id, nome, unidade, categoria, quantidade_atual, quantidade_minima, custo_medio, custo_ultima_compra, status, deficit, ativo, codigo_barras"
 
 
+def _ajustar_estoque(supabase: Client, user_id: str, item_id: str, delta: float, permitir_negativo: bool) -> dict | None:
+    """
+    Mesmo RPC atômico de `atendimentos_service._ajustar_estoque` — `saldo` não
+    pode ser lido aqui e escrito de volta como valor literal (era isso que
+    `criar_movimentacao` fazia): duas movimentações do mesmo item ao mesmo
+    tempo (ex.: uma entrada manual e uma baixa de atendimento) se
+    sobrescreveriam, e uma ficaria perdida. `p_user_id` explícito porque quem
+    chama aqui é o `service_role` — sem JWT de usuária na sessão, `auth.uid()`
+    seria `null` (006_ajustar_estoque_rpc_service_role.sql). Devolve `None`
+    quando a trava impediu o update (saldo insuficiente e `permitir_negativo=False`).
+    """
+    resp = supabase.rpc(
+        "ajustar_estoque",
+        {
+            "p_item_id": item_id,
+            "p_delta": delta,
+            "p_permitir_negativo": permitir_negativo,
+            "p_user_id": user_id,
+        },
+    ).execute()
+    linhas = rows(resp.data)
+    return linhas[0] if linhas else None
+
+
 def _validar_codigo_barras_livre(
     supabase: Client, user_id: str, codigo_barras: str, ignorar_item_id: str | None = None
 ) -> None:
@@ -113,7 +137,7 @@ def editar(supabase: Client, user_id: str, item_id: str, body: ItemPatchIn) -> d
         _validar_codigo_barras_livre(supabase, user_id, body.codigo_barras, ignorar_item_id=item_id)
         campos["codigo_barras"] = body.codigo_barras
     if campos:
-        supabase.table("estoque_itens").update(campos).eq("id", item_id).execute()
+        supabase.table("estoque_itens").update(campos).eq("id", item_id).eq("user_id", user_id).execute()
     return _buscar_item(supabase, user_id, item_id)
 
 
@@ -127,9 +151,9 @@ def excluir(supabase: Client, user_id: str, item_id: str) -> None:
         .execute()
     )
     if rows(resp.data):
-        supabase.table("estoque_itens").update({"ativo": False}).eq("id", item_id).execute()
+        supabase.table("estoque_itens").update({"ativo": False}).eq("id", item_id).eq("user_id", user_id).execute()
     else:
-        supabase.table("estoque_itens").delete().eq("id", item_id).execute()
+        supabase.table("estoque_itens").delete().eq("id", item_id).eq("user_id", user_id).execute()
 
 
 def criar_movimentacao(supabase: Client, user_id: str, item_id: str, body: MovimentacaoIn) -> dict:
@@ -158,24 +182,47 @@ def criar_movimentacao(supabase: Client, user_id: str, item_id: str, body: Movim
             },
         )
 
-    novo_saldo = qtd_atual
+    # Média ponderada móvel (A6) calculada com o saldo de ANTES do ajuste — o
+    # RPC abaixo só mexe em `quantidade_atual`, custo é sempre um update à parte.
     novo_custo_medio = custo_medio
     novo_custo_ultima_compra = custo_ultima
+    if body.tipo == "entrada" and body.custo_unitario is not None:
+        if qtd_atual <= 0:
+            novo_custo_medio = body.custo_unitario
+        else:
+            novo_custo_medio = (
+                qtd_atual * custo_medio + body.quantidade * body.custo_unitario
+            ) / (qtd_atual + body.quantidade)
+        novo_custo_ultima_compra = body.custo_unitario
 
-    if body.tipo == "entrada":
-        novo_saldo = qtd_atual + body.quantidade
-        if body.custo_unitario is not None:
-            if qtd_atual <= 0:
-                novo_custo_medio = body.custo_unitario
-            else:
-                novo_custo_medio = (
-                    qtd_atual * custo_medio + body.quantidade * body.custo_unitario
-                ) / novo_saldo
-            novo_custo_ultima_compra = body.custo_unitario
-    elif body.tipo == "saida":
-        novo_saldo = qtd_atual - body.quantidade
-    else:  # ajuste
-        novo_saldo = qtd_atual + body.quantidade
+    delta = -body.quantidade if body.tipo == "saida" else body.quantidade
+    permitir_negativo = body.tipo != "saida"
+
+    # Ajuste atômico pelo RPC — nunca leitura-depois-escrita: duas
+    # movimentações do mesmo item ao mesmo tempo (entrada manual e baixa de
+    # atendimento, por exemplo) não podem se sobrescrever.
+    resultado = _ajustar_estoque(supabase, user_id, item_id, delta, permitir_negativo)
+    if resultado is None:
+        resp_atual = supabase.table("estoque_itens").select("quantidade_atual").eq("id", item_id).execute()
+        atual = row(resp_atual.data)
+        disponivel = float(atual["quantidade_atual"]) if atual else qtd_atual
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "codigo": "ESTOQUE_INSUFICIENTE",
+                "mensagem": "Saldo insuficiente para essa saída.",
+                "result": {
+                    "faltantes": [{
+                        "item_estoque_id": item["id"],
+                        "nome": item["nome"],
+                        "unidade": item["unidade"],
+                        "quantidade_solicitada": body.quantidade,
+                        "quantidade_disponivel": disponivel,
+                        "deficit": body.quantidade - disponivel,
+                    }]
+                },
+            },
+        )
 
     supabase.table("estoque_movimentacoes").insert({
         "user_id": user_id,
@@ -187,11 +234,11 @@ def criar_movimentacao(supabase: Client, user_id: str, item_id: str, body: Movim
         "forcada": False,
     }).execute()
 
-    supabase.table("estoque_itens").update({
-        "quantidade_atual": novo_saldo,
-        "custo_medio": novo_custo_medio,
-        "custo_ultima_compra": novo_custo_ultima_compra,
-    }).eq("id", item_id).execute()
+    if novo_custo_medio != custo_medio or novo_custo_ultima_compra != custo_ultima:
+        supabase.table("estoque_itens").update({
+            "custo_medio": novo_custo_medio,
+            "custo_ultima_compra": novo_custo_ultima_compra,
+        }).eq("id", item_id).eq("user_id", user_id).execute()
 
     return _buscar_item(supabase, user_id, item_id)
 
