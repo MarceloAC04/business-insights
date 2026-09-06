@@ -44,32 +44,91 @@ foi pedido explicitamente, e vale a partir desta data.
   **Não inventar isso ad-hoc tela por tela** — é a mesma razão pela qual o padrão
   Flutter existia.
 
-## Reversão de A1 — frontend fala direto com o Supabase (05/09/2026)
+## A1 volta a valer — FastAPI é o caminho principal de novo (06/09/2026)
+
+Decisão do dono do projeto, na branch `feat/api-integracao-supabase`: **A1 é
+restaurada**, por cima da reversão de 05/09 descrita logo abaixo (que fica preservada
+como histórico, não apagada). O `frontend/salao_web` volta a falar só com o FastAPI
+por uma única `baseUrl`; o acesso direto ao Supabase feito na branch
+`feat/react-supabase` **não foi apagado** — continua existindo em código — mas passa a
+ser **Plano B**, sem ser o caminho ativo enquanto esta decisão valer.
+
+- **Método do trabalho nesta branch**: varredura módulo a módulo, **na mesma ordem** já
+  usada na migração anterior — Auth → Resumo → Atendimentos → Gastos → Estoque → Kits →
+  Perfil → Servicos → Alertas → Agendamento_publico. Para cada módulo: comparar a
+  implementação do frontend que fala direto com o Supabase (já verificada ponta a ponta
+  contra o projeto real, branch `feat/react-supabase`) contra o
+  router/service/schema do FastAPI correspondente, e corrigir o que faltava ou estava
+  errado na API antes de passar ao próximo módulo. Essa varredura está **completa** —
+  os dez módulos foram fechados, cada um com commit próprio no histórico desta branch.
+  Importante: isso fechou **divergências entre o que já existia dos dois lados**, não
+  é o mesmo que terminar `pedidos-backend.md` — endpoints que nunca chegaram a existir
+  no FastAPI continuam faltando (ver "Dívidas conhecidas do backend" abaixo).
+- Bugs reais encontrados e corrigidos nessa varredura:
+  - **Escopo por `user_id` faltando em vários `update`/`delete`** (Perfil, Servicos,
+    Alertas) — o cliente `service_role` do FastAPI ignora RLS, então um
+    `.eq("user_id", ...)` explícito no update/delete é a única barreira de fato; sem
+    ele, uma checagem de posse só na leitura não impede escrever/apagar o registro de
+    outro `user_id`.
+  - **Bug de fuso horário**: `date.today()` usa o fuso do servidor (UTC em produção),
+    não o de Brasília — corrigido em `perfil_service.py` com o mesmo padrão
+    `_hoje_brasil()` já usado em `gastos_service.py`.
+  - **`PUT /perfil` apagava a foto salva** sempre que `foto_url` vinha omitido (o
+    Pydantic não distingue "campo omitido" de "campo enviado como null", e o frontend
+    nunca envia esse campo) — corrigido para só escrever `foto_url` quando vier
+    preenchido.
+  - **`DELETE /servicos/{id}` fazia hard delete** quando o serviço nunca tinha sido
+    usado em atendimento; o frontend sempre espera soft delete (`ativo: false`) —
+    unificado para sempre soft delete, batendo com o próprio docstring do endpoint.
+  - **Check constraint de `alertas.tipo`/`alertas.referencia_tipo` desatualizado**: o
+    schema Python (`TipoAlerta`) já tinha `custo_fixo_a_vencer`/`custo_fixo_vencido`
+    havia tempo, mas o constraint do banco nunca foi atualizado — nova migração
+    `007_alertas_tipo_custo_fixo.sql` (ainda não rodada, ver abaixo).
+  - **`agendamento_publico_service.py` reimplementava em Python**, contra as tabelas
+    cruas com o `service_role`, a mesma lógica que já existe nas 3 RPCs `security
+    definer` de `005_agendamento_publico_rpc.sql` — com uma janela de corrida real e
+    **admitida pelo próprio código** entre a checagem de horário livre e o insert do
+    atendimento. Reescrito para delegar às RPCs (`supabase.rpc(...)`), que fecham essa
+    janela com `pg_advisory_xact_lock` por salão. Nenhuma RPC depende de `auth.uid()`
+    (resolvem o salão pelo `slug`), então funcionam idênticas chamadas pelo
+    `service_role` ou pela `anon key` do frontend — não precisou de migração nova.
+- **Duas migrações ainda não foram rodadas** no projeto Supabase real — sem caminho de
+  DDL automático nesta sessão, precisam ser coladas no SQL Editor do Supabase
+  Dashboard pelo dono do projeto:
+  - `006_ajustar_estoque_rpc_service_role.sql` — adiciona `p_user_id` explícito a
+    `ajustar_estoque`, necessário pro FastAPI chamar essa RPC como `service_role` (sem
+    `auth.uid()` de sessão).
+  - `007_alertas_tipo_custo_fixo.sql` — corrige os check constraints de `alertas`
+    descritos acima.
+- **A dívida do JWT sem verificação de assinatura volta a ser uma falha de segurança
+  ativa** (ver "Dívidas conhecidas do backend" abaixo) — deixa de ser "código parado
+  sem consumidor" agora que a API tem consumidor de novo.
+- Todo texto deste arquivo que ainda diz "`api/` não tem mais consumidor", "sem trilha
+  ativa" ou equivalente está desatualizado a partir desta data — corrija ao encostar.
+
+## Reversão de A1 (05/09/2026) — histórico, superada pela seção acima
+
+Registro mantido por ser referência de como e por que o app passou uma janela falando
+direto com o Supabase — não descreve mais o estado atual.
 
 Decisão do dono do projeto, na branch `feat/react-supabase`: **A1 caiu**. O
-`frontend/salao_web` não passa mais pelo FastAPI — fala direto com o Supabase pelo
+`frontend/salao_web` não passava mais pelo FastAPI — falava direto com o Supabase pelo
 cliente `@supabase/supabase-js` (chave `anon`), módulo por módulo, na ordem **Auth →
 Resumo → Atendimentos → Gastos → Estoque → Kits → Perfil → Servicos → Alertas →
-Agendamento_publico**. Essa lista está **completa** — os dez módulos já migraram e
-foram verificados ponta a ponta contra o projeto Supabase real.
+Agendamento_publico**. Essa lista ficou **completa** — os dez módulos migraram e foram
+verificados ponta a ponta contra o projeto Supabase real. Esse código **continua
+existindo** em `frontend/salao_web` como Plano B (ver seção acima) — só deixou de ser o
+caminho ativo.
 
-- **RLS (`using (auth.uid() = user_id)`) é a fronteira de autorização agora**, não o
-  FastAPI. Nunca a chave `service_role` no cliente — só a `anon`, em `lib/supabase.ts`.
-- **Onde RLS não basta** (atomicidade de saldo, ou operação sem sessão que precisa
-  enxergar através da RLS), a regra vira função Postgres `security definer`, chamada
+- RLS (`using (auth.uid() = user_id)`) era a fronteira de autorização nesse desenho, não
+  o FastAPI. A chave `service_role` nunca deve ir ao cliente — só a `anon`, em
+  `lib/supabase.ts` — regra que continua valendo para o código do Plano B.
+- Onde RLS não bastava (atomicidade de saldo, ou operação sem sessão que precisa
+  enxergar através da RLS), a regra virou função Postgres `security definer`, chamada
   via `supabase.rpc(...)`: `ajustar_estoque` (`004_ajustar_estoque_rpc.sql`, saldo de
   estoque/kit) e as três de `005_agendamento_publico_rpc.sql`
-  (`agendamento_publico_pagina/horarios/agendar` — o único módulo sem login, que
-  precisa ver nome do salão/tabela de preços/expediente sem `auth.uid()`, e travar com
-  `pg_advisory_xact_lock` para não deixar dois clientes públicos reservarem o mesmo
-  horário). Isso é o substituto direto do que o service role do FastAPI fazia — é
-  security definer, nunca `service_role` no cliente.
-- **`api/` (FastAPI) não tem mais consumidor.** Continua existindo — não foi apagado —
-  mas nenhum frontend fala com ele; sem trilha ativa enquanto essa decisão não for
-  revisitada. A "Trilha backend" e as dívidas de contrato descritas mais abaixo (§
-  "Dívidas conhecidas do backend") descrevem esse código parado, não um bloqueio atual.
-- Todo código/comentário deste arquivo que ainda diz "A1 vigente" ou "o frontend nunca
-  fala com o Supabase" está desatualizado — corrija ao encostar.
+  (`agendamento_publico_pagina/horarios/agendar` — o único módulo sem login). Essas RPCs
+  continuam existindo e agora também são chamadas pelo FastAPI (ver seção acima).
 
 ## Repositório
 
@@ -83,7 +142,7 @@ business-insights/
 │   ├── padrao-de-projeto-react.md # padrão do frontend atual (React) — trilha R0, fechada
 │   ├── endpoints-backend.md       # contrato: operações que o FastAPI deve expor (framework-agnóstico)
 │   └── pedidos-backend.md         # ordens de serviço da F4, em lotes L0–L8
-├── api/                           # FastAPI — sem consumidor desde a reversão de A1 (05/09/2026)
+├── api/                           # FastAPI — caminho principal de novo (06/09/2026)
 ├── database/
 │   ├── schema.sql                 # Supabase/Postgres (estado antes da V1, histórico)
 │   └── migrations/
@@ -91,10 +150,13 @@ business-insights/
 │       ├── 002_seed_teste.sql              # dados de teste (NÃO rodar em produção)
 │       ├── 003_agendamento_publico.sql     # slug, horario_funcionamento, origem
 │       ├── 004_ajustar_estoque_rpc.sql     # RPC security definer: saldo de estoque/kit
-│       └── 005_agendamento_publico_rpc.sql # RPCs security definer: link público
+│       ├── 005_agendamento_publico_rpc.sql # RPCs security definer: link público
+│       ├── 006_ajustar_estoque_rpc_service_role.sql # p_user_id p/ chamada via service_role — AINDA NÃO RODADA
+│       └── 007_alertas_tipo_custo_fixo.sql           # check constraints de alertas — AINDA NÃO RODADA
 ├── frontend/
 │   ├── salao_app/                 # Flutter — CONGELADO (04/09/2026), não desenvolver
-│   └── salao_web/                 # React — frontend atual, fala direto com o Supabase
+│   └── salao_web/                 # React — fala com a API FastAPI (Plano B: Supabase
+│                                   # direto, código preservado, branch feat/react-supabase)
 └── n8n/                           # automações (WhatsApp, cron, resumos)
 ```
 
@@ -111,7 +173,7 @@ congelado.
 
 | # | Decisão | Status | Consequência |
 |---|---|---|---|
-| **A1** | **Tudo via FastAPI.** Uma única `baseUrl`. O frontend **nunca** fala com o Supabase (nem PostgREST, nem RPC, nem SDK). | ❌ Revertida (05/09/2026) | Ver "Reversão de A1" acima. O `salao_web` fala direto com o Supabase; RLS é a fronteira de autorização; regra que a RLS não cobre vira função `security definer`. O mapa de endpoints (`.specs/endpoints-backend.md`) e o FastAPI ficam como referência de contrato/histórico, sem consumidor. |
+| **A1** | **Tudo via FastAPI.** Uma única `baseUrl`. O frontend fala com o Supabase só como Plano B. | ✅ Restaurada (06/09/2026), após uma janela revertida (05–06/09/2026) | Ver "A1 volta a valer" acima. O `salao_web` volta a falar só com o FastAPI; o acesso direto ao Supabase (`feat/react-supabase`) continua em código como Plano B. `.specs/endpoints-backend.md` volta a ser o contrato que o FastAPI implementa, não só histórico. |
 | **A2** | **Módulo `auth` completo.** Login, token, interceptor 401, route guard. | ⚠️ Vale o conceito; implementação Flutter (`AppStorage`, interceptor Dio) está congelada | Em React precisa do equivalente: onde o token fica, como toda chamada autenticada reage a 401, como a rota protegida redireciona — a definir junto do padrão de projeto React. |
 | **A3** | **Alertas in-app + push agora; WhatsApp e e-mail só mapeados.** | ✅ Vigente | Badge, banner, central de alertas continuam necessários em React. Push depende de F5 (abaixo), hoje sem prioridade sem build nativo. Endpoints de WhatsApp/e-mail seguem *futuro* — n8n já tem fluxos prontos. |
 | **A4** | **`AppStorage` só sobre `SharedPreferences`.** | 🧊 Congelada (só Flutter) | Não se aplica a React. Equivalente (provavelmente `localStorage`, sem offline-first) fica para o padrão de projeto React. |
@@ -123,14 +185,17 @@ congelado.
 
 ### O que essas decisões apagam do estado atual
 
-- `api/README.md` e o docstring de `api/app/main.py` dizem "CRUD puro → Supabase REST
-  (frontend chama diretamente)". **Isso voltou a ser verdade com a reversão de A1** —
-  só que hoje é o `salao_web`, não um FastAPI de CRUD puro, quem chama direto. Corrija
-  a referência ao FastAPI quando encostar nesses arquivos.
+- `api/README.md` e o docstring de `api/app/main.py`, se ainda disserem "CRUD puro →
+  Supabase REST (frontend chama diretamente)", estão descrevendo a janela de
+  05–06/09/2026 (A1 revertida), não o estado atual — corrija ao encostar: o FastAPI
+  volta a ser quem o frontend chama, com uma única `baseUrl`.
 - O `schema.sql` foi desenhado para RLS com a *anon key* do Supabase, pensando num
-  cliente batendo direto — **é exatamente o que o `salao_web` faz hoje**. RLS
-  (`auth.uid() = user_id`) é a autorização real, não uma segunda barreira atrás do
-  FastAPI.
+  cliente batendo direto — isso **continua sendo verdade para o Plano B**
+  (`feat/react-supabase`), mas não é mais o caminho ativo. A autorização real do
+  caminho ativo volta a ser o FastAPI + `service_role`, com o cuidado (redescoberto
+  nesta varredura) de que `service_role` ignora RLS — cada `update`/`delete` do
+  backend precisa do próprio `.eq("user_id", ...)` explícito, já que não há mais uma
+  RLS de verdade barrando por baixo.
 
 ## Padrão de projeto Flutter (congelado)
 
@@ -245,7 +310,7 @@ como referência de regra de negócio executável (as duas passadas de A5, a mé
 ponderada de A6, o `KIT_NAO_MONTADO` de A7 estão codificadas lá) — útil de consultar
 mesmo sem tocar mais no Flutter.
 
-### Trilha React (nova, começando do zero)
+### Trilha React (feita, hoje é o código do Plano B)
 
 - [x] **R0 — Padrão de projeto.** Ver `.specs/padrao-de-projeto-react.md`.
 - [x] **R1 — Infra.** Cliente Supabase único (`lib/supabase.ts`), tokens do design
@@ -254,20 +319,32 @@ mesmo sem tocar mais no Flutter.
 - [x] **R3 — Demais módulos**, todos migrados para falar direto com o Supabase (branch
       `feat/react-supabase`), nesta ordem: Auth, Resumo, Atendimentos, Gastos, Estoque,
       Kits, Perfil, Servicos, Alertas, Agendamento_publico. Cada um foi verificado ponta
-      a ponta contra o projeto Supabase real antes de passar para o próximo — ver
-      "Reversão de A1" acima. `.specs/endpoints-backend.md` vale como registro do
-      contrato de dados (nomes de campo, regras de negócio), não mais como endpoint a
-      implementar num backend HTTP.
+      a ponta contra o projeto Supabase real antes de passar para o próximo. Esse código
+      **continua existindo e passando pelos mesmos testes** — só deixou de ser o
+      caminho ativo com "A1 volta a valer" (acima). `.specs/endpoints-backend.md` volta
+      a valer como contrato de endpoint do FastAPI, além de registro de regra de
+      negócio.
 
-### Trilha backend (congelada — sem consumidor desde a reversão de A1)
+### Trilha backend (reaberta em 06/09/2026 — API tem consumidor de novo)
 
-- [ ] **F4 — Backend.** FastAPI implementando `.specs/endpoints-backend.md` ficou
-      inacabado e **não é mais o caminho** — o `salao_web` não passa mais por ele. As
-      dívidas conhecidas abaixo descrevem esse código parado; não são bloqueio de
-      frontend.
+- [x] **Varredura de paridade módulo a módulo** (branch `feat/api-integracao-supabase`):
+      os dez módulos que já tinham implementação nos dois lados (FastAPI e
+      Supabase-direto) foram comparados e as divergências fechadas — ver "A1 volta a
+      valer" acima para a lista de bugs corrigidos.
+- [ ] **F4 — Backend completo.** A varredura acima fechou divergências entre código
+      **que já existia** dos dois lados — não é o mesmo que terminar
+      `pedidos-backend.md`: endpoint que nunca chegou a ser implementado no FastAPI
+      continua faltando (ver dívidas abaixo).
+- [ ] **L0.2 — JWT sem verificação de assinatura.** Volta a ser prioridade viva, não
+      código parado (ver dívida abaixo).
 
-### Dívidas conhecidas do backend (histórico — código sem consumidor)
+### Dívidas conhecidas do backend (ativas de novo — API tem consumidor)
 
+- **`_extrair_user_id` decodifica o JWT sem verificar assinatura**
+  (`api/app/routers/relatorio.py`). **Com A1 restaurada isso é falha de segurança
+  ativa** — qualquer um forja um `sub` e chama a API como qualquer usuária. É o lote
+  **L0.2** de `pedidos-backend.md`, marcado 🔴 — validar com o `SUPABASE_JWT_SECRET`
+  antes de expor este backend a tráfego real.
 - **Contrato de `gastos` diverge**: o app usa `forma_pagamento` ∈ {avista, credito,
   debito, pix} + `categoria` ∈ {material, fixo, outros}; o `schema.sql` usa
   {'à vista','cartão'} + `prioridade` ∈ {alta, média, baixa}. O mapa de endpoints
@@ -275,12 +352,9 @@ mesmo sem tocar mais no Flutter.
 - **`RelatorioMensal` (plano) ≠ `ResumoMensal` (API, aninhado)**. Vence o da API,
   estendido com os insights do protótipo (ticket médio, margem, comparativo com o mês
   anterior, serviço mais lucrativo).
-- **`_extrair_user_id` decodifica o JWT sem verificar assinatura**
-  (`api/app/routers/relatorio.py`). Com A1 isso é falha de segurança real: qualquer um
-  forja um `sub`. É o lote **L0.2** de `pedidos-backend.md`, marcado 🔴 — validar com o
-  `SUPABASE_JWT_SECRET`.
-- **4 de poucos endpoints existem.** `pedidos-backend.md` é a lista do que falta, em
-  ordem de dependência.
+- **Endpoints que faltam**: `pedidos-backend.md` é a lista do que falta, em ordem de
+  dependência — a varredura de paridade (acima) não cobriu isso, só o que já existia
+  dos dois lados.
 
 ## Convenções de trabalho
 
