@@ -33,11 +33,10 @@ router = APIRouter(prefix="/agendamento-publico", tags=["Agendamento público"])
     summary="Dados públicos do salão para montar a tela de agendar",
 )
 def obter_pagina_agendamento(slug: str, supabase: Client = Depends(get_supabase)):
-    salao = service.buscar_salao_por_slug(supabase, slug)
-    servicos = service.listar_servicos_publicos(supabase, salao["user_id"])
+    dados = service.obter_pagina(supabase, slug)
     payload = AgendamentoPublicoOut(
-        salao=SalaoPublicoOut(nome=salao["nome_salao"], foto_url=salao.get("foto_url")),
-        servicos=[ServicoPublicoOut(**s) for s in servicos],
+        salao=SalaoPublicoOut(**dados["salao"]),
+        servicos=[ServicoPublicoOut(**s) for s in dados["servicos"]],
     )
     return sucesso(payload.model_dump())
 
@@ -53,12 +52,9 @@ def obter_horarios_disponiveis(
     servico_ids: str = Query(..., description="uuids separados por vírgula"),
     supabase: Client = Depends(get_supabase),
 ):
-    salao = service.buscar_salao_por_slug(supabase, slug)
     ids = [s.strip() for s in servico_ids.split(",") if s.strip()]
-    duracao_total, horarios = service.calcular_horarios_disponiveis(
-        supabase, salao["user_id"], data.isoformat(), ids
-    )
-    payload = HorariosDisponiveisOut(duracao_total_minutos=duracao_total, horarios=horarios)
+    dados = service.calcular_horarios_disponiveis(supabase, slug, data.isoformat(), ids)
+    payload = HorariosDisponiveisOut(**dados)
     return sucesso(payload.model_dump())
 
 
@@ -68,10 +64,9 @@ def obter_horarios_disponiveis(
     summary="Cria o agendamento direto como confirmado",
 )
 def agendar(slug: str, dados: AgendarRequest, supabase: Client = Depends(get_supabase)):
-    salao = service.buscar_salao_por_slug(supabase, slug)
     resultado = service.criar_agendamento(
         supabase,
-        user_id=salao["user_id"],
+        slug=slug,
         cliente_nome=dados.cliente_nome,
         cliente_telefone=dados.cliente_telefone,
         data_hora=dados.data,
