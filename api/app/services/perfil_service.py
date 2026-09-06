@@ -1,6 +1,6 @@
 """Serviço de perfil e custos fixos (endpoints-backend.md §7)."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import re
 from fastapi import HTTPException
 from supabase import Client
@@ -16,6 +16,18 @@ from app.schemas.perfil import (
     CustoFixoOut,
     CustosFixosListaOut,
 )
+
+_FUSO_BRASIL = timezone(timedelta(hours=-3))
+
+
+def _hoje_brasil() -> date:
+    """
+    `date.today()` usa o fuso do servidor — em produção isso costuma ser UTC,
+    que já é o dia seguinte ao horário de Brasília entre ~21h e meia-noite.
+    A competência do mês corrente (usada quando a chamada não informa uma)
+    não pode virar mês errado nessa janela.
+    """
+    return datetime.now(_FUSO_BRASIL).date()
 
 
 def _buscar_perfil_salao(supabase: Client, user_id: str) -> dict:
@@ -62,10 +74,17 @@ def atualizar_perfil(supabase: Client, user_id: str, dados: PerfilUpdateIn) -> P
     campos = {
         "nome_salao": dados.nome,
         "nome_proprietaria": dados.proprietaria,
-        "foto_url": dados.foto_url,
         "telefone": dados.telefone_whatsapp,
         "meta_faturamento_mensal": dados.meta_faturamento_mensal,
     }
+    # `foto_url` é opcional e o frontend hoje nunca o envia (não existe upload de
+    # foto na tela de perfil) — se ele entrasse no update incondicionalmente, todo
+    # PUT /perfil (inclusive um que só muda a meta) apagaria uma foto já salva,
+    # porque o Pydantic não distingue "campo omitido" de "campo enviado como null".
+    # Só escreve quando vier preenchido; não há forma de limpar a foto por este
+    # endpoint hoje, mas nenhum cliente atual depende disso.
+    if dados.foto_url is not None:
+        campos["foto_url"] = dados.foto_url
     supabase.table("perfil_salao").update(campos).eq("user_id", user_id).execute()
     return obter_perfil(supabase, user_id)
 
@@ -80,7 +99,7 @@ def listar_custos_fixos(
     user_id: str,
     competencia: str | None = None,
 ) -> CustosFixosListaOut:
-    hoje = date.today()
+    hoje = _hoje_brasil()
     comp = competencia or hoje.strftime("%Y-%m")
     if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", comp):
         raise HTTPException(
@@ -171,7 +190,7 @@ def _buscar_custo_fixo(supabase: Client, user_id: str, custo_id: str) -> dict:
 
 
 def criar_custo_fixo(supabase: Client, user_id: str, dados: CustoFixoIn) -> CustoFixoOut:
-    hoje = date.today()
+    hoje = _hoje_brasil()
     comp = hoje.strftime("%Y-%m")
     insert_resp = (
         supabase.table("custos_fixos")
@@ -208,10 +227,10 @@ def editar_custo_fixo(
         campos["dia_vencimento"] = dados.dia_vencimento
 
     if campos:
-        supabase.table("custos_fixos").update(campos).eq("id", custo_id).execute()
+        supabase.table("custos_fixos").update(campos).eq("id", custo_id).eq("user_id", user_id).execute()
 
     linha = _buscar_custo_fixo(supabase, user_id, custo_id)
-    hoje = date.today()
+    hoje = _hoje_brasil()
     comp = hoje.strftime("%Y-%m")
     data_comp = _competencia_para_date(comp)
 
@@ -266,7 +285,7 @@ def pagar_custo_fixo(
     else:
         supabase.table("custos_fixos_pagamentos").delete().eq(
             "custo_fixo_id", custo_id
-        ).eq("competencia", data_comp).execute()
+        ).eq("competencia", data_comp).eq("user_id", user_id).execute()
         pago_em_dt = None
         pago = False
 
@@ -283,4 +302,4 @@ def pagar_custo_fixo(
 
 def excluir_custo_fixo(supabase: Client, user_id: str, custo_id: str) -> None:
     _buscar_custo_fixo(supabase, user_id, custo_id)
-    supabase.table("custos_fixos").delete().eq("id", custo_id).execute()
+    supabase.table("custos_fixos").delete().eq("id", custo_id).eq("user_id", user_id).execute()

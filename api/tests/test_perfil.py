@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.security import usuario_atual
 from app.core.supabase_client import get_supabase
+from app.schemas.perfil import CustoFixoPatchIn, PerfilUpdateIn
+from app.services import perfil_service
 
 
 TEST_USER_ID = str(uuid.uuid4())
@@ -121,3 +123,120 @@ class TestPerfilEndpoints:
             assert data["result"]["competencia"] == "2026-09"
         finally:
             app.dependency_overrides.clear()
+
+
+class TestPerfilAtualizarNaoApagaFoto:
+    def test_atualizar_perfil_sem_foto_url_nao_limpa_foto_existente(self):
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.update.return_value = mock_table
+        mock_table.execute.side_effect = [
+            MagicMock(data=[{  # _buscar_perfil_salao
+                "id": str(uuid.uuid4()),
+                "user_id": TEST_USER_ID,
+                "nome_salao": "Salão",
+                "nome_proprietaria": "Dona",
+                "foto_url": "https://exemplo/foto.jpg",
+                "telefone": "551199990000",
+                "meta_faturamento_mensal": 9000.0,
+            }]),
+            MagicMock(data=[]),  # update
+            MagicMock(data=[{  # obter_perfil (via _buscar_perfil_salao de novo)
+                "id": str(uuid.uuid4()),
+                "user_id": TEST_USER_ID,
+                "nome_salao": "Salão Novo",
+                "nome_proprietaria": "Dona",
+                "foto_url": "https://exemplo/foto.jpg",
+                "telefone": "551199990000",
+                "meta_faturamento_mensal": 9500.0,
+            }]),
+        ]
+        mock_sb.table.return_value = mock_table
+
+        dados = PerfilUpdateIn(
+            nome="Salão Novo",
+            proprietaria="Dona",
+            telefone_whatsapp="551199990000",
+            meta_faturamento_mensal=9500.0,
+        )
+        perfil_service.atualizar_perfil(mock_sb, TEST_USER_ID, dados)
+
+        campos_enviados = mock_table.update.call_args.args[0]
+        assert "foto_url" not in campos_enviados
+        assert campos_enviados["nome_salao"] == "Salão Novo"
+
+
+class TestPerfilCustosFixosEscopoPorUsuario:
+    def _mock_custo(self):
+        return {
+            "id": TEST_CUSTO_ID,
+            "user_id": TEST_USER_ID,
+            "descricao": "Aluguel",
+            "valor": 1200.0,
+            "dia_vencimento": 5,
+        }
+
+    def test_editar_custo_fixo_filtra_por_user_id_no_update(self):
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.update.return_value = mock_table
+        mock_table.order.return_value = mock_table
+        mock_table.execute.side_effect = [
+            MagicMock(data=[self._mock_custo()]),  # _buscar_custo_fixo (checagem)
+            MagicMock(data=[]),  # update
+            MagicMock(data=[self._mock_custo()]),  # _buscar_custo_fixo (releitura)
+            MagicMock(data=[]),  # checagem de pagamento do mês
+        ]
+        mock_sb.table.return_value = mock_table
+
+        perfil_service.editar_custo_fixo(
+            mock_sb, TEST_USER_ID, TEST_CUSTO_ID, CustoFixoPatchIn(valor=1300.0)
+        )
+
+        eq_calls = [c.args for c in mock_table.eq.call_args_list]
+        assert ("user_id", TEST_USER_ID) in eq_calls
+
+    def test_excluir_custo_fixo_filtra_por_user_id_no_delete(self):
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.delete.return_value = mock_table
+        mock_table.execute.side_effect = [
+            MagicMock(data=[self._mock_custo()]),  # _buscar_custo_fixo
+            MagicMock(data=[]),  # delete
+        ]
+        mock_sb.table.return_value = mock_table
+
+        perfil_service.excluir_custo_fixo(mock_sb, TEST_USER_ID, TEST_CUSTO_ID)
+
+        eq_calls = [c.args for c in mock_table.eq.call_args_list]
+        assert ("user_id", TEST_USER_ID) in eq_calls
+
+    def test_desmarcar_pagamento_filtra_por_user_id_no_delete(self):
+        from app.schemas.perfil import CustoFixoPagarIn
+
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.delete.return_value = mock_table
+        mock_table.execute.side_effect = [
+            MagicMock(data=[self._mock_custo()]),  # _buscar_custo_fixo
+            MagicMock(data=[]),  # delete
+        ]
+        mock_sb.table.return_value = mock_table
+
+        perfil_service.pagar_custo_fixo(
+            mock_sb,
+            TEST_USER_ID,
+            TEST_CUSTO_ID,
+            CustoFixoPagarIn(competencia="2026-09", pago=False),
+        )
+
+        eq_calls = [c.args for c in mock_table.eq.call_args_list]
+        assert ("user_id", TEST_USER_ID) in eq_calls
