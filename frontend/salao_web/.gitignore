@@ -37,3 +37,5 @@ dist-ssr
 # Ambiente local — .env.example e .env.demo ficam versionados
 .env
 .env.local
+.vercel
+.env*

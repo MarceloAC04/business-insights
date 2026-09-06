@@ -1,5 +1,6 @@
 {
   "projects": {
-    "default": "glowapp-salao"
+    "default": "glowapp-salao",
+    "producao": "glowapp-salao-2"
   }
 }
