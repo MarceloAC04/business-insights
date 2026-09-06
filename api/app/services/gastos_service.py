@@ -1,6 +1,6 @@
 """Serviço de gastos (endpoints-backend.md §3)."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import calendar
 from fastapi import HTTPException
 from supabase import Client
@@ -16,6 +16,22 @@ from app.schemas.gastos import (
     CategoriaGasto,
 )
 
+_FUSO_BRASIL = timezone(timedelta(hours=-3))
+
+
+def _hoje_brasil() -> date:
+    """
+    `date.today()` usa o fuso do servidor — em produção isso costuma ser UTC,
+    que já é o dia seguinte ao horário de Brasília entre ~21h e meia-noite.
+    `vence_em_dias` ficaria um dia adiantado nessa janela (gasto que vence
+    "hoje" já apareceria como vencido). O frontend usa a meia-noite local do
+    navegador (`hojeLocal()` em `gastos.ts`) — sem fuso do servidor no meio.
+    Fixamos America/Sao_Paulo (-03:00) para bater com a usuária real, sem
+    depender de tzdata (mesma convenção de offset fixo já usada em
+    `atendimentos_service`/`atendimentos.py` router).
+    """
+    return datetime.now(_FUSO_BRASIL).date()
+
 
 def _converter_linha_para_gasto_out(linha: dict) -> GastoOut:
     prazo_str = linha.get("prazo")
@@ -26,8 +42,7 @@ def _converter_linha_para_gasto_out(linha: dict) -> GastoOut:
     else:
         prazo_data = date.today()
 
-    hoje = date.today()
-    vence_em_dias = (prazo_data - hoje).days
+    vence_em_dias = (prazo_data - _hoje_brasil()).days
 
     pago_em_val = linha.get("pago_em")
     if isinstance(pago_em_val, str):
@@ -84,7 +99,7 @@ def listar_gastos(
     pagina: int = 1,
     tamanho: int = 50,
 ) -> dict:
-    hoje = date.today()
+    hoje = _hoje_brasil()
     alvo_ano = ano or hoje.year
     alvo_mes = mes or hoje.month
     ultimo_dia = calendar.monthrange(alvo_ano, alvo_mes)[1]
@@ -184,7 +199,7 @@ def editar_gasto(supabase: Client, user_id: str, gasto_id: str, body: GastoPatch
         campos["pago_em"] = body.pago_em.isoformat()
 
     if campos:
-        supabase.table("gastos").update(campos).eq("id", gasto_id).execute()
+        supabase.table("gastos").update(campos).eq("id", gasto_id).eq("user_id", user_id).execute()
 
     linha_atualizada = _buscar_gasto(supabase, user_id, gasto_id)
     return _converter_linha_para_gasto_out(linha_atualizada)
@@ -204,7 +219,7 @@ def pagar_gasto(supabase: Client, user_id: str, gasto_id: str, body: GastoPagarI
     supabase.table("gastos").update({
         "pago": True,
         "pago_em": pago_em_str,
-    }).eq("id", gasto_id).execute()
+    }).eq("id", gasto_id).eq("user_id", user_id).execute()
 
     linha_atualizada = _buscar_gasto(supabase, user_id, gasto_id)
     return _converter_linha_para_gasto_out(linha_atualizada)
@@ -212,4 +227,4 @@ def pagar_gasto(supabase: Client, user_id: str, gasto_id: str, body: GastoPagarI
 
 def excluir_gasto(supabase: Client, user_id: str, gasto_id: str) -> None:
     _buscar_gasto(supabase, user_id, gasto_id)
-    supabase.table("gastos").delete().eq("id", gasto_id).execute()
+    supabase.table("gastos").delete().eq("id", gasto_id).eq("user_id", user_id).execute()
