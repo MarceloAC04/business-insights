@@ -7,6 +7,30 @@ from app.core.supabase_client import rows, row
 from app.schemas.atendimentos import AtendimentoBodyIn, FinalizarBodyIn
 
 
+def _ajustar_estoque(supabase: Client, user_id: str, item_id: str, delta: float, permitir_negativo: bool) -> dict | None:
+    """
+    Ajusta o saldo de um item pelo RPC atômico `ajustar_estoque` (`update` com
+    a conta e a trava no mesmo statement) — nunca por `select` seguido de
+    `update` com o valor literal: entre os dois passos, outra finalização do
+    mesmo item ao mesmo tempo escreveria por cima (dado perdido). Com
+    `service_role`, `auth.uid()` não existe na sessão — por isso o RPC
+    precisa de `p_user_id` explícito (006_ajustar_estoque_rpc_service_role.sql).
+    Devolve `None` quando a trava impediu o update (saldo insuficiente e
+    `permitir_negativo=False`).
+    """
+    resp = supabase.rpc(
+        "ajustar_estoque",
+        {
+            "p_item_id": item_id,
+            "p_delta": delta,
+            "p_permitir_negativo": permitir_negativo,
+            "p_user_id": user_id,
+        },
+    ).execute()
+    linhas = rows(resp.data)
+    return linhas[0] if linhas else None
+
+
 def _resolver_servicos(supabase: Client, user_id: str, entradas: list) -> list[dict]:
     """Cada entrada vira {servico_id, nome, preco} — do catálogo ou avulso."""
     ids = [e.servico_id for e in entradas if e.servico_id]
@@ -258,6 +282,53 @@ def finalizar(
 
     itens_com_deficit = {f["item_estoque_id"] for f in faltantes}
 
+    # Soma por item — a mesma composição pode aparecer em mais de uma linha,
+    # e o RPC ajusta o saldo uma vez por item, não uma vez por linha.
+    pedidos: dict[str, float] = {}
+    for m in body.materiais:
+        if m.item_estoque_id:
+            pedidos[m.item_estoque_id] = pedidos.get(m.item_estoque_id, 0) + m.quantidade
+
+    # Decremento atômico primeiro — se a corrida com outra finalização
+    # simultânea fizer a trava disparar (saldo mudou entre a leitura acima e
+    # agora), desfaz os que já tinham sido decrementados nesta chamada e
+    # devolve estoque insuficiente com números atualizados, em vez de deixar
+    # o atendimento gravado com baixa parcial (mesma lógica de
+    # `AtendimentosApi.finalizar` no frontend).
+    decrementados: list[tuple[str, float]] = []
+    for item_id, quantidade in pedidos.items():
+        resultado = _ajustar_estoque(supabase, user_id, item_id, -quantidade, body.confirmar_estoque_insuficiente)
+        if resultado is None:
+            for d_item_id, d_quantidade in decrementados:
+                _ajustar_estoque(supabase, user_id, d_item_id, d_quantidade, True)
+            item = itens_estoque[item_id]
+            resp_atual = (
+                supabase.table("estoque_itens")
+                .select("quantidade_atual")
+                .eq("id", item_id)
+                .execute()
+            )
+            atual = row(resp_atual.data)
+            disponivel = atual.get("quantidade_atual", item["quantidade_atual"]) if atual else item["quantidade_atual"]
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "codigo": "ESTOQUE_INSUFICIENTE",
+                    "mensagem": "Alguns materiais estão sem saldo em estoque.",
+                    "result": {
+                        "faltantes": [{
+                            "item_estoque_id": item["id"],
+                            "nome": item["nome"],
+                            "unidade": item["unidade"],
+                            "quantidade_solicitada": quantidade,
+                            "quantidade_disponivel": disponivel,
+                            "deficit": quantidade - disponivel,
+                        }]
+                    },
+                },
+            )
+        decrementados.append((item_id, quantidade))
+
     linhas_insumo = []
     for m in body.materiais:
         if m.item_estoque_id:
@@ -280,23 +351,18 @@ def finalizar(
     if linhas_insumo:
         supabase.table("atendimento_insumos").insert(linhas_insumo).execute()
 
-    for m in body.materiais:
-        if not m.item_estoque_id:
-            continue
-        item = itens_estoque[m.item_estoque_id]
+    for item_id, quantidade in pedidos.items():
+        item = itens_estoque[item_id]
         supabase.table("estoque_movimentacoes").insert({
             "user_id": user_id,
             "item_id": item["id"],
             "tipo": "saida",
-            "quantidade": m.quantidade,
+            "quantidade": quantidade,
             "motivo": "Consumo em atendimento",
             "custo_unitario": item["custo_medio"],
             "atendimento_id": atendimento_id,
             "forcada": item["id"] in itens_com_deficit,
         }).execute()
-        supabase.table("estoque_itens").update({
-            "quantidade_atual": item["quantidade_atual"] - m.quantidade,
-        }).eq("id", item["id"]).execute()
 
     # custo_insumos_snapshot: composição padrão (produtos_padrao) × custo_medio
     # no momento do fechamento — congela o custo do serviço para o resumo,
@@ -370,27 +436,24 @@ def cancelar(supabase: Client, user_id: str, atendimento_id: str) -> dict:
             .execute()
         )
         for mov in rows(resp_mov.data):
-            resp_item = (
-                supabase.table("estoque_itens")
-                .select("id, quantidade_atual")
-                .eq("id", mov["item_id"])
-                .execute()
-            )
-            item = row(resp_item.data)
-            if not item:
+            # Estorno sempre cabe (devolve saldo) — não precisa da trava de A5,
+            # por isso `permitir_negativo=True` sempre (mesma lógica de
+            # `AtendimentosApi.cancelar` no frontend). Ajuste atômico pelo RPC,
+            # não leitura-depois-escrita: duas devoluções ao mesmo item ao mesmo
+            # tempo (ex.: cancelar dois atendimentos que usaram o mesmo insumo)
+            # não podem se sobrescrever.
+            resultado = _ajustar_estoque(supabase, user_id, mov["item_id"], mov["quantidade"], True)
+            if resultado is None:
                 continue
             supabase.table("estoque_movimentacoes").insert({
                 "user_id": user_id,
-                "item_id": item["id"],
+                "item_id": mov["item_id"],
                 "tipo": "ajuste",
                 "quantidade": mov["quantidade"],
                 "motivo": "Estorno — atendimento cancelado",
                 "atendimento_id": atendimento_id,
                 "forcada": False,
             }).execute()
-            supabase.table("estoque_itens").update({
-                "quantidade_atual": item["quantidade_atual"] + mov["quantidade"],
-            }).eq("id", item["id"]).execute()
 
     supabase.table("atendimentos").update({
         "status": "cancelado",
