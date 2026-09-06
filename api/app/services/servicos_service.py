@@ -152,7 +152,7 @@ def editar(supabase: Client, user_id: str, servico_id: str, body: ServicoPatchIn
         campos["duracao_minutos"] = body.duracao_minutos
 
     if campos:
-        supabase.table("servicos").update(campos).eq("id", servico_id).execute()
+        supabase.table("servicos").update(campos).eq("id", servico_id).eq("user_id", user_id).execute()
 
     if body.produtos_padrao is not None:
         supabase.table("servico_produtos_padrao").delete().eq("servico_id", servico_id).execute()
@@ -166,16 +166,11 @@ def editar(supabase: Client, user_id: str, servico_id: str, body: ServicoPatchIn
 
 
 def excluir(supabase: Client, user_id: str, servico_id: str) -> None:
+    # Sempre soft delete (§8: "serviço já usado em atendimento: soft delete") — o
+    # frontend (servicos.ts, já verificado ponta a ponta) nunca faz hard delete
+    # aqui, mesmo para serviço nunca usado: o snapshot em atendimento preserva
+    # nome/preço históricos, mas um `servico_id` apagado de verdade quebraria
+    # qualquer referência futura e não tem como saber com certeza, no momento da
+    # exclusão, que nenhum atendimento vai precisar dele depois.
     _buscar_servico(supabase, user_id, servico_id)
-    resp = (
-        supabase.table("atendimento_servicos")
-        .select("id")
-        .eq("servico_id", servico_id)
-        .limit(1)
-        .execute()
-    )
-    if rows(resp.data):
-        supabase.table("servicos").update({"ativo": False}).eq("id", servico_id).execute()
-    else:
-        supabase.table("servico_produtos_padrao").delete().eq("servico_id", servico_id).execute()
-        supabase.table("servicos").delete().eq("id", servico_id).execute()
+    supabase.table("servicos").update({"ativo": False}).eq("id", servico_id).eq("user_id", user_id).execute()
