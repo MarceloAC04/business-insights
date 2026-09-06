@@ -83,7 +83,7 @@ ser **Plano B**, sem ser o caminho ativo enquanto esta decisão valer.
   - **Check constraint de `alertas.tipo`/`alertas.referencia_tipo` desatualizado**: o
     schema Python (`TipoAlerta`) já tinha `custo_fixo_a_vencer`/`custo_fixo_vencido`
     havia tempo, mas o constraint do banco nunca foi atualizado — nova migração
-    `007_alertas_tipo_custo_fixo.sql` (ainda não rodada, ver abaixo).
+    `007_alertas_tipo_custo_fixo.sql` (confirmada aplicada em 06/09/2026, ver abaixo).
   - **`agendamento_publico_service.py` reimplementava em Python**, contra as tabelas
     cruas com o `service_role`, a mesma lógica que já existe nas 3 RPCs `security
     definer` de `005_agendamento_publico_rpc.sql` — com uma janela de corrida real e
@@ -92,12 +92,14 @@ ser **Plano B**, sem ser o caminho ativo enquanto esta decisão valer.
     janela com `pg_advisory_xact_lock` por salão. Nenhuma RPC depende de `auth.uid()`
     (resolvem o salão pelo `slug`), então funcionam idênticas chamadas pelo
     `service_role` ou pela `anon key` do frontend — não precisou de migração nova.
-- **Duas migrações ainda não foram rodadas** no projeto Supabase real — sem caminho de
-  DDL automático nesta sessão, precisam ser coladas no SQL Editor do Supabase
-  Dashboard pelo dono do projeto:
+- **As duas migrações abaixo foram confirmadas aplicadas no projeto Supabase real em
+  06/09/2026** (verificação não destrutiva: assinatura de RPC via `hint` do
+  `PGRST202` para a 006; insert-then-delete de uma linha de teste em `alertas` com
+  `tipo = 'custo_fixo_a_vencer'` para a 007 — nenhum dado real foi alterado):
   - `006_ajustar_estoque_rpc_service_role.sql` — adiciona `p_user_id` explícito a
     `ajustar_estoque`, necessário pro FastAPI chamar essa RPC como `service_role` (sem
-    `auth.uid()` de sessão).
+    `auth.uid()` de sessão). O código Python (`estoque_service.py`, `kits_service.py`,
+    `atendimentos_service.py`) já chama a RPC com os nomes de parâmetro certos.
   - `007_alertas_tipo_custo_fixo.sql` — corrige os check constraints de `alertas`
     descritos acima.
 - **A dívida do JWT sem verificação de assinatura volta a ser uma falha de segurança
@@ -151,8 +153,8 @@ business-insights/
 │       ├── 003_agendamento_publico.sql     # slug, horario_funcionamento, origem
 │       ├── 004_ajustar_estoque_rpc.sql     # RPC security definer: saldo de estoque/kit
 │       ├── 005_agendamento_publico_rpc.sql # RPCs security definer: link público
-│       ├── 006_ajustar_estoque_rpc_service_role.sql # p_user_id p/ chamada via service_role — AINDA NÃO RODADA
-│       └── 007_alertas_tipo_custo_fixo.sql           # check constraints de alertas — AINDA NÃO RODADA
+│       ├── 006_ajustar_estoque_rpc_service_role.sql # p_user_id p/ chamada via service_role — aplicada (confirmado 06/09/2026)
+│       └── 007_alertas_tipo_custo_fixo.sql           # check constraints de alertas — aplicada (confirmado 06/09/2026)
 ├── frontend/
 │   ├── salao_app/                 # Flutter — CONGELADO (04/09/2026), não desenvolver
 │   └── salao_web/                 # React — fala com a API FastAPI (Plano B: Supabase

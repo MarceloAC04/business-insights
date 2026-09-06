@@ -10,8 +10,7 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import { Toaster } from "@/components/ui/sonner";
-import { chaves } from "@/lib/queries";
-import { supabase } from "@/lib/supabase";
+import { registrarExpiracaoDeSessao } from "@/lib/http";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
@@ -135,20 +134,15 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
 
-  // Auth mora no Supabase (branch feat/react-supabase): a sessão pode mudar
-  // por fora de um useLogin/useLogout (token renovado sozinho, ou expirado de
-  // verdade) — este listener é quem mantém a chave `sessao` do react-query em
-  // dia nesses casos, e devolve pro login quando o Supabase encerra a sessão.
+  // Auth mora no FastAPI (A1 restaurada): o refresh automático é do
+  // transporte (`http.ts`), que só sabe chamar um callback quando o refresh
+  // falha de verdade — é aqui, no boot, que a navegação de volta pro login
+  // é registrada, já que o transporte não pode importar o router.
   useEffect(() => {
-    const { data: assinatura } = supabase.auth.onAuthStateChange((evento) => {
-      if (evento === "SIGNED_OUT") {
-        queryClient.clear();
-        void router.navigate({ to: "/login" });
-      } else if (evento === "SIGNED_IN" || evento === "TOKEN_REFRESHED") {
-        void queryClient.invalidateQueries({ queryKey: chaves.sessao() });
-      }
+    registrarExpiracaoDeSessao(() => {
+      queryClient.clear();
+      void router.navigate({ to: "/login" });
     });
-    return () => assinatura.subscription.unsubscribe();
   }, [queryClient, router]);
 
   return (

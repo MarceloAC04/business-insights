@@ -17,6 +17,7 @@ from supabase import Client
 
 from app.core.supabase_client import get_supabase, rows
 from app.core.security import usuario_atual
+from app.schemas.envelope import ResponseModel, sucesso
 from app.schemas.relatorio import ResumoMensal
 from app.services.relatorio_service import calcular_resumo_mensal
 from app.services.webhook_service import notificar_alerta_saldo
@@ -34,7 +35,7 @@ router = APIRouter(prefix="/resumo", tags=["Resumo"])
 
 @router.get(
     "/mensal",
-    response_model=ResumoMensal,
+    response_model=ResponseModel[ResumoMensal],
     summary="Resumo financeiro consolidado do mês",
     description=(
         "Agrega atendimentos, insumos, gastos e custos fixos do mês "
@@ -53,7 +54,7 @@ async def resumo_mensal(
     # Dispara alerta ao n8n em background — não bloqueia a resposta
     await notificar_alerta_saldo(user_id, resumo)
 
-    return resumo
+    return sucesso(resumo)
 
 
 # ── GET /relatorio/semanal ─────────────────────────────────────────
@@ -118,11 +119,11 @@ async def resumo_semanal(
         gastos_pendentes=gastos_pendentes,
     )
 
-    return {
+    return sucesso({
         "semana_inicio": inicio.isoformat(),
         "semana_fim": fim.isoformat(),
         "atendimentos": len(ids_atend),
         "receita_bruta": round(receita_bruta, 2),
         "gastos_pendentes": round(gastos_pendentes, 2),
         "saldo_semana": round(receita_bruta - gastos_pendentes, 2),
-    }
+    })

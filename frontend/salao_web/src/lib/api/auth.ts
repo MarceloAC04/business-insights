@@ -1,71 +1,50 @@
-import type { User } from "@supabase/supabase-js";
-import { ApiError, AppErrorCodes } from "../error-codes";
-import { supabase } from "../supabase";
-import type { Salao, Usuario } from "../types";
+import { AppApi } from "../http";
+import { AppStorage } from "../storage";
+import type { Salao, Sessao, Usuario } from "../types";
+import { Paths } from "./paths";
 
 /**
- * `auth` — sem FastAPI no meio (branch `feat/react-supabase`).
+ * `auth` — 4 operações (§1 do contrato).
  *
- * Login, logout e sessão são o próprio Supabase Auth (GoTrue): ele já
- * persiste e renova o token sozinho, em storage próprio — por isso não há
- * mais fila de refresh nem gravação manual em `AppStorage` aqui. O único
- * dado que buscamos à parte é a linha de `perfil_salao`, protegida por RLS
- * (`auth.uid() = user_id`).
+ * É o único módulo que escreve no `AppStorage`: quem guarda e apaga a sessão é
+ * daqui, não a tela de login. O refresh automático vive no transporte
+ * (`http.ts`).
  */
-
-function usuarioDoSupabase(user: User): Usuario {
-  const nome = (user.user_metadata as { nome?: string } | null)?.nome;
-  return {
-    id: user.id,
-    nome: nome ?? user.email ?? "",
-    email: user.email ?? "",
-  };
-}
-
-async function buscarSalao(userId: string): Promise<Salao> {
-  const { data, error } = await supabase
-    .from("perfil_salao")
-    .select("id, nome_salao, foto_url")
-    .eq("user_id", userId)
-    .single();
-
-  // Sem policy/linha ainda (usuária nova) não é motivo pra derrubar o login —
-  // mostra um salão vazio em vez de quebrar a tela.
-  if (error || !data) {
-    return { id: userId, nome: "Meu Salão", foto_url: null };
-  }
-  return {
-    id: data["id"] as string,
-    nome: (data["nome_salao"] as string | null) ?? "Meu Salão",
-    foto_url: (data["foto_url"] as string | null) ?? null,
-  };
-}
-
 export const AuthApi = {
+  /** Login não leva bearer: a credencial é o próprio corpo. */
   async login(email: string, senha: string): Promise<{ usuario: Usuario; salao: Salao }> {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password: senha,
-    });
-    if (error || !data.user) {
-      throw new ApiError(401, AppErrorCodes.invalidCredentials, "E-mail ou senha não conferem.");
-    }
-    const usuario = usuarioDoSupabase(data.user);
-    const salao = await buscarSalao(data.user.id);
-    return { usuario, salao };
+    const { result } = await AppApi.postSemToken<Sessao>(Paths.login, { email, senha });
+    AppStorage.salvarSessao(result);
+    return { usuario: result.usuario, salao: result.salao };
   },
 
+  /**
+   * Avisa o servidor e limpa a sessão local.
+   *
+   * A falha da chamada não impede a saída: se ela clicou em "sair", sair é o
+   * que tem que acontecer — token inválido no servidor é problema do servidor.
+   */
   async logout(): Promise<void> {
-    await supabase.auth.signOut();
+    try {
+      await AppApi.post(Paths.logout);
+    } finally {
+      AppStorage.limpar();
+    }
   },
 
-  /** Sessão já guardada pelo Supabase (boot do app / F5) — `null` se não houver. */
+  /**
+   * Sessão guardada localmente (boot do app / F5), revalidada contra o
+   * servidor. `null` quando não há token guardado ou quando a revalidação
+   * falha (token/refresh inválidos) — o transporte já derruba a sessão local
+   * nesse caso, então aqui só resta devolver `null` para o guard de rota.
+   */
   async sessaoAtual(): Promise<{ usuario: Usuario; salao: Salao } | null> {
-    const { data } = await supabase.auth.getSession();
-    const user = data.session?.user;
-    if (!user) return null;
-    const usuario = usuarioDoSupabase(user);
-    const salao = await buscarSalao(user.id);
-    return { usuario, salao };
+    if (!AppStorage.autenticado) return null;
+    try {
+      const { result } = await AppApi.get<{ usuario: Usuario; salao: Salao }>(Paths.eu);
+      return result;
+    } catch {
+      return null;
+    }
   },
 } as const;
