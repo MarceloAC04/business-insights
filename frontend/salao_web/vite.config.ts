@@ -11,7 +11,15 @@ export default defineConfig({
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this
     server: { entry: "server" },
+    // App e 100% client-side (nenhuma rota usa createServerFn/loader/beforeLoad) — modo "spa"
+    // nativo do TanStack Start: prerenderiza um shell estatico e mascara toda rota pra ele,
+    // gerando um index.html deployavel em qualquer hosting estatico (Firebase Hosting), sem
+    // precisar de worker SSR.
+    spa: { enabled: true },
   },
+  // Sem nitro: nao precisamos do worker SSR (cloudflare-module padrao) — so do bundle client
+  // gerado pelo modo spa acima.
+  nitro: false,
   vite: {
     server: {
       // Permite acesso via túnel (cloudflared/ngrok) pra testar no celular —
