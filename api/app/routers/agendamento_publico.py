@@ -11,7 +11,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 from supabase import Client
 
-from app.core.supabase_client import get_supabase
+from app.core.supabase_client import get_supabase_publico
 from app.schemas.agendamento_publico import (
     AgendamentoCriadoOut,
     AgendamentoPublicoOut,
@@ -32,7 +32,7 @@ router = APIRouter(prefix="/agendamento-publico", tags=["Agendamento público"])
     response_model=ResponseModel[AgendamentoPublicoOut],
     summary="Dados públicos do salão para montar a tela de agendar",
 )
-def obter_pagina_agendamento(slug: str, supabase: Client = Depends(get_supabase)):
+def obter_pagina_agendamento(slug: str, supabase: Client = Depends(get_supabase_publico)):
     dados = service.obter_pagina(supabase, slug)
     payload = AgendamentoPublicoOut(
         salao=SalaoPublicoOut(**dados["salao"]),
@@ -50,7 +50,7 @@ def obter_horarios_disponiveis(
     slug: str,
     data: date = Query(...),
     servico_ids: str = Query(..., description="uuids separados por vírgula"),
-    supabase: Client = Depends(get_supabase),
+    supabase: Client = Depends(get_supabase_publico),
 ):
     ids = [s.strip() for s in servico_ids.split(",") if s.strip()]
     dados = service.calcular_horarios_disponiveis(supabase, slug, data.isoformat(), ids)
@@ -63,7 +63,7 @@ def obter_horarios_disponiveis(
     response_model=ResponseModel[AgendamentoCriadoOut],
     summary="Cria o agendamento direto como confirmado",
 )
-def agendar(slug: str, dados: AgendarRequest, supabase: Client = Depends(get_supabase)):
+def agendar(slug: str, dados: AgendarRequest, supabase: Client = Depends(get_supabase_publico)):
     resultado = service.criar_agendamento(
         supabase,
         slug=slug,

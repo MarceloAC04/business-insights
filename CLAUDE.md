@@ -132,6 +132,45 @@ ser **Plano B**, sem ser o caminho ativo enquanto esta decisão valer.
 - Todo texto deste arquivo que ainda diz "`api/` não tem mais consumidor", "sem trilha
   ativa" ou equivalente está desatualizado a partir desta data — corrija ao encostar.
 
+## Testes E2E reais contra o Supabase de produção (07/09/2026)
+
+Decisão do dono do projeto: os testes automatizados do fluxo completo rodam contra o
+FastAPI local, que por sua vez fala com o **mesmo projeto Supabase real** de sempre —
+sem projeto de teste separado (ver "Separação dev/prod... abandonada" acima). Usuária
+fixa: `teste@salap.app` / `Salao@2026`; todo dado gerado vive só sob o `user_id` dessa
+conta, isolado da conta real da Thamires. Limpeza dos dados de teste ainda **não foi
+decidida** (ficou deliberadamente em aberto).
+
+- **`api/tests_e2e/test_fluxo_completo.py`** — script novo, não é pytest (bate na API
+  de verdade, não mocka nada). Cobre login, perfil/expediente/serviços, atendimentos
+  em dois meses, resumo mensal comparando os dois meses, gastos (pendente + vencido +
+  pago), alertas, agendamento público com duas tentativas simultâneas no mesmo horário
+  (trava de concorrência) e agendamento fora do expediente. Como rodar: subir
+  `uvicorn app.main:app --port 8091` a partir de `api/` com o `.env` real, depois
+  `python tests_e2e/test_fluxo_completo.py`.
+- **Bug real encontrado e corrigido**: `routers/agendamento_publico.py` usava
+  `get_supabase()` — o cliente Supabase **singleton**, compartilhado por todas as
+  requisições do processo (`core/supabase_client.py`). Sob duas requisições
+  HTTP genuinamente concorrentes ao mesmo salão (exatamente o caso que a trava
+  `pg_advisory_xact_lock` da RPC precisa suportar), as duas rodam ao mesmo tempo no
+  mesmo `httpx.Client` interno; observado na prática que o transporte síncrono pode
+  estourar um erro de socket transitório (não um erro de negócio) — e como a RPC
+  `agendamento_publico_agendar` não é seguramente re-chamável depois de já ter rodado,
+  isso não dá pra resolver com retry. Corrigido com `get_supabase_publico()`, um
+  cliente novo por requisição (chave `anon`, já suficiente — as 3 RPCs desse módulo
+  são `security definer` e não dependem de `auth.uid()`), usado agora nas 3 rotas de
+  `agendamento_publico.py`. Depois desse fix, a trava de concorrência real da RPC foi
+  confirmada funcionando: das duas tentativas simultâneas, exatamente uma recebe `200`
+  e a outra `409 HORARIO_INDISPONIVEL`.
+- **Bug real encontrado, não no backend — no contrato que o script de teste não
+  seguia**: o campo `data` enviado a `POST /agendamento-publico/{slug}/agendar` precisa
+  do offset `-03:00` explícito (Brasília) — é assim que `routes/agendar.$slug.tsx` do
+  frontend já monta (`` `${data}T${horario}:00-03:00` ``). Um horário "naive" (sem
+  offset) é interpretado pelo Postgres como UTC ao ser convertido para `timestamptz`,
+  deslocando a hora local em 3h e caindo fora do expediente — isso fazia até uma
+  chamada isolada (sem concorrência nenhuma) ser rejeitada com `HORARIO_INDISPONIVEL`.
+  Corrigido no próprio script de teste, não é bug do backend nem da RPC.
+
 ## Reversão de A1 (05/09/2026) — histórico, superada pela seção acima
 
 Registro mantido por ser referência de como e por que o app passou uma janela falando

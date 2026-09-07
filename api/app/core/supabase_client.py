@@ -37,6 +37,29 @@ def get_supabase_auth() -> Client:
     return create_client(cfg.supabase_url, cfg.supabase_anon_key)
 
 
+def get_supabase_publico() -> Client:
+    """
+    Cliente novo a cada chamada, com a chave `anon` — para o módulo
+    `agendamento_publico` (`routers/agendamento_publico.py`), o único que
+    atende requisição sem sessão. As 3 RPCs desse módulo já são `security
+    definer` e não dependem de `auth.uid()` (resolvem o salão pelo `slug`),
+    então funcionam idênticas com a chave `anon` ou com a `service_role` —
+    mas usar aqui o cliente singleton de `get_supabase()` (service_role,
+    compartilhado por todo o processo) expõe cada requisição concorrente a
+    concorrência real dentro do MESMO `httpx.Client` interno. Observado na
+    prática (07/09/2026, testes automatizados de agendamento simultâneo): sob
+    duas requisições verdadeiramente concorrentes ao mesmo slug, o transporte
+    síncrono compartilhado pode estourar um erro de socket transitório que não
+    é um erro de negócio da RPC — e como a RPC não é seguramente re-chamável
+    depois de já ter rodado (a segunda tentativa veria o próprio agendamento
+    já criado e devolveria HORARIO_INDISPONIVEL para si mesma), não dá pra
+    resolver isso com retry. Um cliente descartável por requisição elimina o
+    compartilhamento e com ele a causa da colisão.
+    """
+    cfg = get_settings()
+    return create_client(cfg.supabase_url, cfg.supabase_anon_key)
+
+
 from typing import Any, cast
 
 
