@@ -24,7 +24,21 @@ export type StatusEstoque = "ok" | "alerta" | "critico" | "negativo";
 
 export type UnidadeEstoque = "un" | "ml" | "g" | "cx";
 
-export type CategoriaEstoque = "cilios" | "sobrancelha" | "limpeza_pele" | "descartavel" | "outro";
+export type CategoriaEstoque =
+  | "cilios"
+  | "sobrancelha"
+  | "limpeza_pele"
+  | "descartavel"
+  | "micropigmentacao"
+  | "reconstrucao"
+  | "outro";
+
+/**
+ * Além de saldo em unidades (`quantidade`, o padrão), um item pode ser
+ * controlado por validade: quantos dias a unidade aberta dura
+ * (`validade_dias`) ou quantos atendimentos ela rende (`validade_atendimentos`).
+ */
+export type ModoControleEstoque = "quantidade" | "validade_dias" | "validade_atendimentos";
 
 export type TipoMovimentacao = "entrada" | "saida" | "ajuste";
 
@@ -144,6 +158,15 @@ export interface ItemEstoque {
   ativo: boolean;
   /** Código bipado com a câmera — null até a primeira bipagem desse item. */
   codigo_barras: string | null;
+  modo_controle: ModoControleEstoque;
+  duracao_dias: number | null;
+  duracao_atendimentos: number | null;
+  unidade_aberta_em: string | null;
+  atendimentos_desde_abertura: number;
+  /** Calculados pelo backend a partir de `now()` — só fazem sentido quando `modo_controle` não é "quantidade". */
+  dias_restantes: number | null;
+  atendimentos_restantes: number | null;
+  status_validade: StatusEstoque | null;
 }
 
 export interface EstoquePagina {

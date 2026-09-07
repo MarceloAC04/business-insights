@@ -274,6 +274,15 @@ export class DemoDatabase {
       deficit: Math.max(0, row.quantidade_minima - row.quantidade_atual),
       ativo: row.ativo,
       codigo_barras: row.codigo_barras,
+      // Modo demo não simula validade por tempo/atendimentos — só saldo (A5).
+      modo_controle: "quantidade",
+      duracao_dias: null,
+      duracao_atendimentos: null,
+      unidade_aberta_em: null,
+      atendimentos_desde_abertura: 0,
+      dias_restantes: null,
+      atendimentos_restantes: null,
+      status_validade: null,
     };
   }
 

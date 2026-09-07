@@ -2,6 +2,7 @@ import { AppApi } from "../http";
 import type {
   CategoriaEstoque,
   EstoquePagina,
+  ModoControleEstoque,
   Movimentacao,
   TipoMovimentacao,
   UnidadeEstoque,
@@ -26,6 +27,12 @@ export interface ItemBody {
   custo_unitario: number;
   /** Código bipado com a câmera — omitido quando o item não tem um. */
   codigo_barras?: string | null;
+  /** Padrão "quantidade" quando omitido — controle por saldo, como sempre foi. */
+  modo_controle?: ModoControleEstoque;
+  /** Obrigatório quando `modo_controle` é "validade_dias". */
+  duracao_dias?: number | null;
+  /** Obrigatório quando `modo_controle` é "validade_atendimentos". */
+  duracao_atendimentos?: number | null;
 }
 
 export interface MovimentacaoBody {
@@ -67,6 +74,11 @@ export const EstoqueApi = {
 
   criarMovimentacao(itemId: string, body: MovimentacaoBody): Promise<void> {
     return AppApi.post(Paths.movimentacoesDoItem(itemId), body).then(() => undefined);
+  },
+
+  /** "Abri agora" — reinicia dias/atendimentos sem lançar entrada (item já era dela, não foi compra nova). */
+  abrirUnidade(itemId: string): Promise<void> {
+    return AppApi.post(Paths.abrirUnidadeEstoque(itemId), {}).then(() => undefined);
   },
 
   listarMovimentacoes(params?: {

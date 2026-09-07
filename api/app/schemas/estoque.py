@@ -3,8 +3,21 @@
 from pydantic import BaseModel, model_validator
 
 UNIDADES = {"un", "ml", "g", "cx"}
-CATEGORIAS = {"cilios", "sobrancelha", "limpeza_pele", "descartavel", "outro"}
+CATEGORIAS = {
+    "cilios",
+    "sobrancelha",
+    "limpeza_pele",
+    "descartavel",
+    "micropigmentacao",
+    "reconstrucao",
+    "outro",
+}
 TIPOS_MOVIMENTACAO = {"entrada", "saida", "ajuste"}
+# Além de saldo em unidades (padrão), um item pode ser controlado pelo tempo
+# desde que a unidade em uso foi aberta (`validade_dias`) ou pela quantidade
+# de atendimentos que ela já rendeu (`validade_atendimentos`) — pedido do
+# dono do projeto (06/09/2026, 008_estoque_validade_e_catalogo.sql).
+MODOS_CONTROLE = {"quantidade", "validade_dias", "validade_atendimentos"}
 
 
 class ItemIn(BaseModel):
@@ -15,6 +28,9 @@ class ItemIn(BaseModel):
     quantidade_minima: float = 0
     custo_unitario: float = 0
     codigo_barras: str | None = None
+    modo_controle: str = "quantidade"
+    duracao_dias: int | None = None
+    duracao_atendimentos: int | None = None
 
     @model_validator(mode="after")
     def _validar(self):
@@ -26,6 +42,7 @@ class ItemIn(BaseModel):
             raise ValueError("quantidade_minima não pode ser negativa")
         if self.codigo_barras is not None:
             self.codigo_barras = self.codigo_barras.strip() or None
+        _validar_modo_controle(self.modo_controle, self.duracao_dias, self.duracao_atendimentos)
         return self
 
 
@@ -35,6 +52,9 @@ class ItemPatchIn(BaseModel):
     categoria: str | None = None
     quantidade_minima: float | None = None
     codigo_barras: str | None = None
+    modo_controle: str | None = None
+    duracao_dias: int | None = None
+    duracao_atendimentos: int | None = None
 
     @model_validator(mode="after")
     def _validar(self):
@@ -46,7 +66,20 @@ class ItemPatchIn(BaseModel):
             raise ValueError("quantidade_minima não pode ser negativa")
         if self.codigo_barras is not None:
             self.codigo_barras = self.codigo_barras.strip() or None
+        if self.modo_controle is not None:
+            _validar_modo_controle(self.modo_controle, self.duracao_dias, self.duracao_atendimentos)
         return self
+
+
+def _validar_modo_controle(modo: str, duracao_dias: int | None, duracao_atendimentos: int | None) -> None:
+    if modo not in MODOS_CONTROLE:
+        raise ValueError(f"modo_controle deve ser um de {MODOS_CONTROLE}")
+    if modo == "validade_dias" and not duracao_dias:
+        raise ValueError("duracao_dias é obrigatório quando modo_controle é validade_dias")
+    if modo == "validade_atendimentos" and not duracao_atendimentos:
+        raise ValueError(
+            "duracao_atendimentos é obrigatório quando modo_controle é validade_atendimentos"
+        )
 
 
 class MovimentacaoIn(BaseModel):
@@ -77,6 +110,16 @@ class ItemOut(BaseModel):
     deficit: float
     ativo: bool
     codigo_barras: str | None = None
+    modo_controle: str = "quantidade"
+    duracao_dias: int | None = None
+    duracao_atendimentos: int | None = None
+    unidade_aberta_em: str | None = None
+    atendimentos_desde_abertura: int = 0
+    # Calculados no backend (não dá pra gerar no Postgres — depende de
+    # `now()`). Ausentes (`None`) quando modo_controle é "quantidade".
+    dias_restantes: int | None = None
+    atendimentos_restantes: int | None = None
+    status_validade: str | None = None
 
 
 class EstoquePaginaOut(BaseModel):

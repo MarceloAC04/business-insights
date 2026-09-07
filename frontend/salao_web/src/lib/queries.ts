@@ -350,6 +350,15 @@ export function useCriarMovimentacao() {
   });
 }
 
+/** "Abri agora": reinicia a contagem de validade sem lançar entrada (item já era dela). */
+export function useAbrirUnidade() {
+  const cliente = useQueryClient();
+  return useMutation({
+    mutationFn: (itemId: string) => EstoqueApi.abrirUnidade(itemId),
+    onSuccess: () => invalidar(cliente, ["estoque", ...SEMPRE]),
+  });
+}
+
 // ── kits ─────────────────────────────────────────────────────────────────────
 
 export function useKits() {

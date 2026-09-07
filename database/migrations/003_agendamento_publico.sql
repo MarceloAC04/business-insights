@@ -218,14 +218,24 @@ alter table alertas
 -- semeando um expediente default: seg-sex 09:00–19:00, sáb 09:00–14:00,
 -- dom fechado — o mesmo exemplo do mapa de endpoints (§7). A usuária ajusta
 -- depois em PUT /perfil/horario-funcionamento.
+--
+-- Correção (07/09/2026): esta redefinição tinha perdido o `slug_agendamento`
+-- que 001 já preenchia (bug nunca visto em produção — só existe a conta da
+-- Thamires ali, criada antes de tudo isso e nunca recriada; qualquer
+-- segunda usuária real nova, num projeto que já rodou até aqui, sempre
+-- quebrava com `null value in column "slug_agendamento"`, porque a coluna
+-- já é `not null` desde a §3 deste mesmo arquivo, bem antes desta função). A
+-- coluna sempre existe neste ponto do script (§3 já rodou), então preenche
+-- direto, sem a cautela de `information_schema`/try-except que 001 usa (lá
+-- sim pode haver uma janela real entre a função existir e a coluna existir).
 
 create or replace function criar_perfil_ao_cadastrar()
 returns trigger language plpgsql security definer
 set search_path = public
 as $fn$
 begin
-  insert into public.perfil_salao (user_id, email)
-  values (new.id, new.email)
+  insert into public.perfil_salao (user_id, email, slug_agendamento)
+  values (new.id, new.email, 'salao-' || substr(new.id::text, 1, 8))
   on conflict (user_id) do nothing;
 
   insert into public.alerta_preferencias (user_id)

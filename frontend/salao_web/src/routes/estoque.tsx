@@ -4,6 +4,7 @@ import {
   ArrowUpFromLine,
   Boxes,
   Package,
+  PackageOpen,
   PackagePlus,
   Plus,
   ScanBarcode,
@@ -49,6 +50,7 @@ import { formatBRL, formatDateTime, formatMoedaInput, parseMoedaInput } from "@/
 import { EstoqueApi } from "@/lib/api/estoque";
 import {
   textoDoErro,
+  useAbrirUnidade,
   useCriarItem,
   useCriarKit,
   useCriarMovimentacao,
@@ -64,6 +66,7 @@ import type {
   FormaPagamento,
   ItemEstoque,
   Kit,
+  ModoControleEstoque,
   StatusEstoque,
   TipoMovimentacao,
   UnidadeEstoque,
@@ -114,9 +117,28 @@ const CATEGORIAS: { valor: CategoriaEstoque; label: string }[] = [
   { valor: "cilios", label: "Cílios" },
   { valor: "sobrancelha", label: "Sobrancelhas" },
   { valor: "limpeza_pele", label: "Limpeza de pele" },
+  { valor: "micropigmentacao", label: "Micropigmentação" },
+  { valor: "reconstrucao", label: "Protocolos de reconstrução" },
   { valor: "descartavel", label: "Descartáveis" },
   { valor: "outro", label: "Outros" },
 ];
+
+const MODOS_CONTROLE: { valor: ModoControleEstoque; label: string; hint: string }[] = [
+  { valor: "quantidade", label: "Só por saldo", hint: "Avisa quando o saldo chega no mínimo." },
+  {
+    valor: "validade_dias",
+    label: "Por validade (dias)",
+    hint: "Ex.: 1 pote de creme dura tantos dias depois de aberto.",
+  },
+  {
+    valor: "validade_atendimentos",
+    label: "Por atendimentos",
+    hint: "Ex.: 1 pote de creme rende tantos atendimentos depois de aberto.",
+  },
+];
+
+/** `status_validade` reaproveita as cores de `StatusEstoque` — mesma leitura, outra régua. */
+const tomValidade: Record<"ok" | "alerta" | "critico" | "negativo", BadgeTone> = tomStatus;
 
 const FORMAS: { valor: FormaPagamento; label: string }[] = [
   { valor: "a_vista", label: "À vista" },
@@ -126,6 +148,57 @@ const FORMAS: { valor: FormaPagamento; label: string }[] = [
 ];
 
 const rotuloCategoria = new Map(CATEGORIAS.map((c) => [c.valor, c.label]));
+
+/**
+ * Sugestão de automação #4 (06/09/2026): a maior parte do trabalho de
+ * classificar um item novo (mesmo critério da migração 009 — equipamento
+ * fica em "quantidade", pote/frasco que se gasta por uso vira "atendimentos",
+ * o que resseca pelo tempo aberto vira "dias") já dá para adivinhar pelo
+ * nome. Reduz o cadastro a "confirmar", não "decidir do zero" — só sugere;
+ * a usuária pode trocar o select livremente, e trocar manualmente uma vez
+ * já desliga a sugestão automática para aquele cadastro (ver `modoTocado`).
+ */
+const PALAVRAS_ATENDIMENTOS = [
+  "cola",
+  "henna",
+  "cera",
+  "pigmento",
+  "anestés",
+  "sérum",
+  "serum",
+  "linha",
+];
+const PALAVRAS_DIAS = [
+  "espuma",
+  "tônico",
+  "tonico",
+  "gel",
+  "esfoliante",
+  "máscara",
+  "mascara",
+  "emoliente",
+  "shampoo",
+  "óleo",
+  "oleo",
+  "primer",
+  "finalizador",
+];
+
+function sugerirModoControle(nome: string): {
+  modoControle: ModoControleEstoque;
+  duracaoDias: string;
+  duracaoAtendimentos: string;
+} {
+  const alvo = nome.trim().toLowerCase();
+  if (!alvo) return { modoControle: "quantidade", duracaoDias: "", duracaoAtendimentos: "" };
+  if (PALAVRAS_ATENDIMENTOS.some((p) => alvo.includes(p))) {
+    return { modoControle: "validade_atendimentos", duracaoDias: "", duracaoAtendimentos: "15" };
+  }
+  if (PALAVRAS_DIAS.some((p) => alvo.includes(p))) {
+    return { modoControle: "validade_dias", duracaoDias: "45", duracaoAtendimentos: "" };
+  }
+  return { modoControle: "quantidade", duracaoDias: "", duracaoAtendimentos: "" };
+}
 
 function EstoquePage() {
   const { data: estoque, isPending, isError, error } = useEstoque();
@@ -137,6 +210,7 @@ function EstoquePage() {
   const criarKit = useCriarKit();
   const montar = useMontarKit();
   const vender = useVenderKit();
+  const abrirUnidade = useAbrirUnidade();
 
   const [entradaItem, setEntradaItem] = useState<ItemEstoque | null>(null);
   const [saidaItem, setSaidaItem] = useState<ItemEstoque | null>(null);
@@ -155,7 +229,7 @@ function EstoquePage() {
   const [formaVenda, setFormaVenda] = useState<FormaPagamento>("pix");
 
   const [itemAberto, setItemAberto] = useState(false);
-  const [formItem, setFormItem] = useState({
+  const formItemInicial = {
     nome: "",
     categoria: "cilios" as CategoriaEstoque,
     unidade: "un" as UnidadeEstoque,
@@ -163,7 +237,13 @@ function EstoquePage() {
     minimo: "1",
     custo: "",
     codigoBarras: null as string | null,
-  });
+    modoControle: "quantidade" as ModoControleEstoque,
+    duracaoDias: "",
+    duracaoAtendimentos: "",
+  };
+  const [formItem, setFormItem] = useState(formItemInicial);
+  // Enquanto ela não escolher o modo à mão, o nome digitado sugere um — ver `sugerirModoControle`.
+  const [modoTocado, setModoTocado] = useState(false);
 
   const [bipando, setBipando] = useState(false);
   const [buscandoCodigo, setBuscandoCodigo] = useState(false);
@@ -205,6 +285,13 @@ function EstoquePage() {
     setTipoSaida("saida");
     setQtd("1");
     setMotivo("");
+  };
+
+  const marcarUnidadeAberta = (p: ItemEstoque) => {
+    abrirUnidade.mutate(p.id, {
+      onSuccess: () => toast.success(`${p.nome}: contagem de validade reiniciada.`),
+      onError: (erro) => toast.error(textoDoErro(erro)),
+    });
   };
 
   const confirmarEntrada = () => {
@@ -272,6 +359,16 @@ function EstoquePage() {
       toast.error("Informe nome, quantidade e custo do produto.");
       return;
     }
+    const duracaoDias = Number(formItem.duracaoDias.replace(",", "."));
+    const duracaoAtendimentos = Number(formItem.duracaoAtendimentos.replace(",", "."));
+    if (formItem.modoControle === "validade_dias" && !(duracaoDias > 0)) {
+      toast.error("Informe depois de quantos dias a unidade aberta acaba.");
+      return;
+    }
+    if (formItem.modoControle === "validade_atendimentos" && !(duracaoAtendimentos > 0)) {
+      toast.error("Informe depois de quantos atendimentos a unidade aberta acaba.");
+      return;
+    }
     criarItem.mutate(
       {
         nome: formItem.nome.trim(),
@@ -281,19 +378,16 @@ function EstoquePage() {
         quantidade_minima: Number.isFinite(minimo) ? minimo : 1,
         custo_unitario: custoUnitario,
         codigo_barras: formItem.codigoBarras,
+        modo_controle: formItem.modoControle,
+        duracao_dias: formItem.modoControle === "validade_dias" ? duracaoDias : null,
+        duracao_atendimentos:
+          formItem.modoControle === "validade_atendimentos" ? duracaoAtendimentos : null,
       },
       {
         onSuccess: () => {
           setItemAberto(false);
-          setFormItem({
-            nome: "",
-            categoria: "cilios",
-            unidade: "un",
-            quantidade: "0",
-            minimo: "1",
-            custo: "",
-            codigoBarras: null,
-          });
+          setFormItem(formItemInicial);
+          setModoTocado(false);
           toast.success("Produto cadastrado no estoque.");
         },
         onError: (erro) => toast.error(textoDoErro(erro)),
@@ -316,15 +410,7 @@ function EstoquePage() {
             toast.success(`Produto reconhecido: ${encontrado.nome}.`);
             abrirEntrada(encontrado);
           } else {
-            setFormItem({
-              nome: "",
-              categoria: "cilios",
-              unidade: "un",
-              quantidade: "0",
-              minimo: "1",
-              custo: "",
-              codigoBarras: codigo,
-            });
+            setFormItem({ ...formItemInicial, codigoBarras: codigo });
             toast.message("Código novo — cadastre o produto.");
             setItemAberto(true);
           }
@@ -492,6 +578,21 @@ function EstoquePage() {
                           <Pill tone={tomStatus[p.status]}>{rotuloStatus[p.status]}</Pill>
                           <Pill>Custo médio {formatBRL(p.custo_medio)}</Pill>
                           {p.deficit > 0 ? <Pill tone="warning">Faltam {p.deficit}</Pill> : null}
+                          {p.modo_controle === "validade_dias" && p.dias_restantes !== null ? (
+                            <Pill tone={tomValidade[p.status_validade ?? "ok"]}>
+                              {p.dias_restantes > 0
+                                ? `Acaba em ${p.dias_restantes} dia(s)`
+                                : "Validade vencida"}
+                            </Pill>
+                          ) : null}
+                          {p.modo_controle === "validade_atendimentos" &&
+                          p.atendimentos_restantes !== null ? (
+                            <Pill tone={tomValidade[p.status_validade ?? "ok"]}>
+                              {p.atendimentos_restantes > 0
+                                ? `Acaba em ${p.atendimentos_restantes} atendimento(s)`
+                                : "Validade vencida"}
+                            </Pill>
+                          ) : null}
                         </div>
                       </div>
                       <div className="shrink-0 text-right">
@@ -509,6 +610,18 @@ function EstoquePage() {
                         </p>
                         <p className="text-[11px] text-muted-foreground">{p.unidade}</p>
                         <div className="mt-2 flex justify-end gap-1">
+                          {p.modo_controle !== "quantidade" ? (
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              aria-label="Abri agora (reinicia a validade sem compra)"
+                              title="Abri agora — abriu uma unidade que já tinha, sem comprar"
+                              onClick={() => marcarUnidadeAberta(p)}
+                              disabled={abrirUnidade.isPending}
+                            >
+                              <PackageOpen className="size-4 text-brand" />
+                            </Button>
+                          ) : null}
                           <Button
                             size="icon"
                             variant="ghost"
@@ -882,7 +995,10 @@ function EstoquePage() {
         open={itemAberto}
         onOpenChange={(o) => {
           setItemAberto(o);
-          if (!o) setFormItem((f) => ({ ...f, codigoBarras: null }));
+          if (!o) {
+            setFormItem((f) => ({ ...f, codigoBarras: null }));
+            setModoTocado(false);
+          }
         }}
       >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
@@ -904,7 +1020,12 @@ function EstoquePage() {
               <Input
                 id="nome-produto"
                 value={formItem.nome}
-                onChange={(e) => setFormItem({ ...formItem, nome: e.target.value })}
+                onChange={(e) => {
+                  const nome = e.target.value;
+                  setFormItem((f) =>
+                    modoTocado ? { ...f, nome } : { ...f, nome, ...sugerirModoControle(nome) },
+                  );
+                }}
                 placeholder="Ex.: cola para extensão de cílios"
               />
             </div>
@@ -976,6 +1097,57 @@ function EstoquePage() {
                 />
               </div>
             </div>
+            <div className="space-y-1.5">
+              <Label>Como avisar que está acabando</Label>
+              <Select
+                value={formItem.modoControle}
+                onValueChange={(v) => {
+                  setModoTocado(true);
+                  setFormItem({ ...formItem, modoControle: v as ModoControleEstoque });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MODOS_CONTROLE.map((m) => (
+                    <SelectItem key={m.valor} value={m.valor}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {MODOS_CONTROLE.find((m) => m.valor === formItem.modoControle)?.hint}
+                {!modoTocado && formItem.modoControle !== "quantidade"
+                  ? " (sugestão pelo nome — pode trocar)"
+                  : ""}
+              </p>
+            </div>
+            {formItem.modoControle === "validade_dias" ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="duracao-dias">Dura quantos dias depois de aberto</Label>
+                <Input
+                  id="duracao-dias"
+                  inputMode="numeric"
+                  value={formItem.duracaoDias}
+                  onChange={(e) => setFormItem({ ...formItem, duracaoDias: e.target.value })}
+                  placeholder="Ex.: 30"
+                />
+              </div>
+            ) : null}
+            {formItem.modoControle === "validade_atendimentos" ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="duracao-atendimentos">Rende quantos atendimentos depois de aberto</Label>
+                <Input
+                  id="duracao-atendimentos"
+                  inputMode="numeric"
+                  value={formItem.duracaoAtendimentos}
+                  onChange={(e) => setFormItem({ ...formItem, duracaoAtendimentos: e.target.value })}
+                  placeholder="Ex.: 10"
+                />
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button

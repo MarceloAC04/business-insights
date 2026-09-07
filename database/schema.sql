@@ -97,14 +97,21 @@ alter table gastos          enable row level security;
 alter table custos_fixos    enable row level security;
 
 -- Política padrão: usuário acessa apenas seus próprios registros
+-- `drop policy if exists` antes de cada `create` (07/09/2026): sem isso, rodar
+-- este arquivo uma segunda vez (ex.: bootstrap de um projeto dev) quebra com
+-- `42710: policy ... already exists` — mesmo cuidado de idempotência que as
+-- migrações seguintes já aplicam a trigger/constraint.
+drop policy if exists "usuario acessa proprios servicos" on servicos;
 create policy "usuario acessa proprios servicos"
   on servicos for all
   using (auth.uid() = user_id);
 
+drop policy if exists "usuario acessa proprios atendimentos" on atendimentos;
 create policy "usuario acessa proprios atendimentos"
   on atendimentos for all
   using (auth.uid() = user_id);
 
+drop policy if exists "usuario acessa servicos dos proprios atendimentos" on atendimento_servicos;
 create policy "usuario acessa servicos dos proprios atendimentos"
   on atendimento_servicos for all
   using (
@@ -113,6 +120,7 @@ create policy "usuario acessa servicos dos proprios atendimentos"
     )
   );
 
+drop policy if exists "usuario acessa insumos dos proprios atendimentos" on atendimento_insumos;
 create policy "usuario acessa insumos dos proprios atendimentos"
   on atendimento_insumos for all
   using (
@@ -121,10 +129,12 @@ create policy "usuario acessa insumos dos proprios atendimentos"
     )
   );
 
+drop policy if exists "usuario acessa proprios gastos" on gastos;
 create policy "usuario acessa proprios gastos"
   on gastos for all
   using (auth.uid() = user_id);
 
+drop policy if exists "usuario acessa proprios custos fixos" on custos_fixos;
 create policy "usuario acessa proprios custos fixos"
   on custos_fixos for all
   using (auth.uid() = user_id);

@@ -83,12 +83,12 @@ def _carregar_composicoes(supabase: Client, kit_ids: list[str]) -> dict[str, lis
 
 
 def _carregar_saldos(supabase: Client, item_ids: list[str]) -> dict[str, dict]:
-    """item_estoque_id -> {nome, unidade, quantidade_atual, custo_medio}."""
+    """item_estoque_id -> {nome, unidade, quantidade_atual, custo_medio, modo_controle, atendimentos_desde_abertura}."""
     if not item_ids:
         return {}
     resp = (
         supabase.table("estoque_itens")
-        .select("id, nome, unidade, quantidade_atual, custo_medio")
+        .select("id, nome, unidade, quantidade_atual, custo_medio, modo_controle, atendimentos_desde_abertura")
         .in_("id", item_ids)
         .execute()
     )
@@ -315,6 +315,14 @@ def montar(supabase: Client, user_id: str, kit_id: str, body: MontarKitIn) -> di
             "kit_id": kit_id,
             "forcada": item_id in itens_com_deficit,
         }).execute()
+        if (item.get("modo_controle") or "quantidade") == "validade_atendimentos":
+            # Montar kit também "usa" o frasco/pote aberto, do mesmo jeito que
+            # `atendimentos_service.finalizar` incrementa direto — sem isso,
+            # um insumo de validade por atendimento vendido só via kit nunca
+            # contava as vezes de uso (gap conhecido, endpoints-backend.md §6).
+            supabase.table("estoque_itens").update({
+                "atendimentos_desde_abertura": int(item.get("atendimentos_desde_abertura") or 0) + int(body.quantidade),
+            }).eq("id", item_id).eq("user_id", user_id).execute()
 
     # O saldo de insumo já passou pelo RPC atômico acima — o único ponto sem
     # trava de corrida é este `quantidade_montada += quantidade`. Não existe

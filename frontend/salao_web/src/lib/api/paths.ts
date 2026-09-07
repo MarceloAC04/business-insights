@@ -36,6 +36,7 @@ export const Paths = {
   estoqueItem: (id: string) => `/estoque/itens/${id}`,
   movimentacoesDoItem: (id: string) => `/estoque/itens/${id}/movimentacoes`,
   movimentacoes: "/estoque/movimentacoes",
+  abrirUnidadeEstoque: (id: string) => `/estoque/itens/${id}/abrir`,
 
   // kits
   kits: "/kits",

@@ -44,6 +44,30 @@ foi pedido explicitamente, e vale a partir desta data.
   **Não inventar isso ad-hoc tela por tela** — é a mesma razão pela qual o padrão
   Flutter existia.
 
+## Separação dev/prod no backend — tentada e abandonada (07/09/2026)
+
+Registro mantido por ser referência de decisão revertida — não descreve mais o estado
+atual. Motivação original: rodar um fluxo de teste automatizado de ponta a ponta sem
+poluir os dados reais da Thamires teria pedido um segundo projeto Supabase (dev/teste),
+selecionado no FastAPI via uma variável de processo `APP_ENV` decidindo qual `.env.*`
+carregar. Decisão do dono do projeto: **abandonar essa separação** — os testes rodam
+contra o mesmo projeto Supabase real que já existe. Todo o mecanismo criado para isso
+(`_escolher_env_file` em `config.py`, `.env.production`, `.env.development.example`,
+`database/migrations/_dev_bootstrap.sql`) foi revertido/removido.
+
+Duas correções reais encontradas durante essa tentativa **foram mantidas**, por serem
+bugs de verdade, independentes do esquema dev/prod:
+- `database/schema.sql` ganhou `drop policy if exists` antes de cada `create policy`
+  (idempotência — sem isso, rodar o arquivo uma segunda vez em qualquer projeto quebra
+  com `42710: policy ... already exists`).
+- `criar_perfil_ao_cadastrar()` em `003_agendamento_publico.sql` estava sem
+  `slug_agendamento` no insert de `perfil_salao` — bug real que quebraria (`null value
+  in column "slug_agendamento"`) o cadastro de qualquer segunda usuária nova no
+  **projeto de produção real**, não só em um projeto de teste. Nunca apareceu até hoje
+  porque só existe a conta da Thamires, criada antes dessa migração existir. Corrigido
+  também em `001_v1_completo.sql` (troca de detecção por `information_schema` para
+  `begin/exception when undefined_column`, mais robusta).
+
 ## A1 volta a valer — FastAPI é o caminho principal de novo (06/09/2026)
 
 Decisão do dono do projeto, na branch `feat/api-integracao-supabase`: **A1 é
@@ -154,7 +178,10 @@ business-insights/
 │       ├── 004_ajustar_estoque_rpc.sql     # RPC security definer: saldo de estoque/kit
 │       ├── 005_agendamento_publico_rpc.sql # RPCs security definer: link público
 │       ├── 006_ajustar_estoque_rpc_service_role.sql # p_user_id p/ chamada via service_role — aplicada (confirmado 06/09/2026)
-│       └── 007_alertas_tipo_custo_fixo.sql           # check constraints de alertas — aplicada (confirmado 06/09/2026)
+│       ├── 007_alertas_tipo_custo_fixo.sql           # check constraints de alertas — aplicada (confirmado 06/09/2026)
+│       ├── 008_estoque_validade_e_catalogo.sql       # estoque por validade/atendimentos + catálogo e serviços reais da Thamires (fictício) — aplicada em produção (confirmado 06/09/2026)
+│       ├── 009_ajuste_validade_produtos_padrao.sql   # corrige modo_controle por item (nem tudo é "quantidade") + produtos padrão completos por serviço — AINDA NÃO aplicada
+│       └── 010_alertas_tipo_validade.sql             # tipos validade_proxima/validade_vencida no check constraint de alertas.tipo — AINDA NÃO aplicada
 ├── frontend/
 │   ├── salao_app/                 # Flutter — CONGELADO (04/09/2026), não desenvolver
 │   └── salao_web/                 # React — fala com a API FastAPI (Plano B: Supabase

@@ -16,6 +16,8 @@ TipoAlerta = Literal[
     "custo_fixo_vencido",
     "saldo_negativo",
     "zero_a_zero",
+    "validade_proxima",
+    "validade_vencida",
 ]
 PlataformaDispositivo = Literal["android", "ios", "web"]
 

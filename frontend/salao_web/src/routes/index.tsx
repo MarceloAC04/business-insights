@@ -3,6 +3,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   CalendarPlus,
+  Clock,
   Crown,
   Lightbulb,
   Package,
@@ -112,6 +113,17 @@ function ResumoPage() {
   // Quem classifica o item é o servidor (`status`), não a tela.
   const baixos = useMemo(() => (estoque?.itens ?? []).filter((i) => i.status !== "ok"), [estoque]);
 
+  // Mesmo raciocínio de `baixos`, mas para `status_validade` (item por dias
+  // ou por atendimentos, ver estoque.tsx) — antes só aparecia na tela de
+  // Estoque, sem chegar no resumo (sugestão de automação #5, 06/09/2026).
+  const vencendo = useMemo(
+    () =>
+      (estoque?.itens ?? []).filter(
+        (i) => i.status_validade === "alerta" || i.status_validade === "critico",
+      ),
+    [estoque],
+  );
+
   const servicos = resumo?.receita.servicos_mais_realizados ?? [];
   const melhor = servicos[0];
   const variacao = resumo?.insights.variacao_percentual_mes_anterior ?? 0;
@@ -148,6 +160,7 @@ function ResumoPage() {
       );
     }
     if (baixos.length) insights.push(`${baixos.length} produtos precisam de reposição.`);
+    if (vencendo.length) insights.push(`${vencendo.length} produtos estão com validade acabando.`);
     if (metaProgresso < 80 && resumo.meta_faturamento_mensal > 0) {
       insights.push(
         `Você alcançou ${formatPercent(metaProgresso)} da meta de faturamento de ${formatBRL(resumo.meta_faturamento_mensal)}.`,
@@ -432,6 +445,43 @@ function ResumoPage() {
                 ) : (
                   <p className="text-sm text-muted-foreground">
                     Todos os produtos estão com estoque saudável.
+                  </p>
+                )}
+              </Card>
+
+              <Card tone={vencendo.length ? "warning" : "default"} className="p-4">
+                <SectionTitle
+                  action={
+                    <Link to="/estoque" className="text-xs font-semibold text-primary-accent">
+                      Ver estoque
+                    </Link>
+                  }
+                >
+                  Validade perto do fim
+                </SectionTitle>
+                {vencendo.length ? (
+                  <ul className="space-y-2">
+                    {vencendo.slice(0, 5).map((p) => (
+                      <li key={p.id} className="flex items-center justify-between gap-3 text-sm">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <Clock className="size-4 shrink-0 text-warning" />
+                          <span className="truncate">{p.nome}</span>
+                        </span>
+                        <Pill tone={p.status_validade === "alerta" ? "warning" : "negative"}>
+                          {p.modo_controle === "validade_dias"
+                            ? (p.dias_restantes ?? 0) > 0
+                              ? `${p.dias_restantes} dia(s)`
+                              : "Vencido"
+                            : (p.atendimentos_restantes ?? 0) > 0
+                              ? `${p.atendimentos_restantes} atend.`
+                              : "Vencido"}
+                        </Pill>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Nenhum produto com validade acabando.
                   </p>
                 )}
               </Card>

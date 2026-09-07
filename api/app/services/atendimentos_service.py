@@ -237,7 +237,9 @@ def finalizar(
     if ids_estoque:
         resp = (
             supabase.table("estoque_itens")
-            .select("id, nome, unidade, quantidade_atual, custo_medio")
+            .select(
+                "id, nome, unidade, quantidade_atual, custo_medio, modo_controle, atendimentos_desde_abertura"
+            )
             .eq("user_id", user_id)
             .in_("id", ids_estoque)
             .execute()
@@ -328,6 +330,17 @@ def finalizar(
                 },
             )
         decrementados.append((item_id, quantidade))
+
+    # Item no modo "validade_atendimentos" (008_estoque_validade_e_catalogo.sql):
+    # cada atendimento consumido conta como um uso da unidade aberta, pra
+    # avisar quando ela estiver perto de acabar por atendimentos, não só por
+    # saldo. Uma vez por item por finalização, não uma vez por quantidade.
+    for item_id, _ in decrementados:
+        item = itens_estoque[item_id]
+        if item.get("modo_controle") == "validade_atendimentos":
+            supabase.table("estoque_itens").update({
+                "atendimentos_desde_abertura": int(item.get("atendimentos_desde_abertura") or 0) + 1,
+            }).eq("id", item_id).eq("user_id", user_id).execute()
 
     linhas_insumo = []
     for m in body.materiais:

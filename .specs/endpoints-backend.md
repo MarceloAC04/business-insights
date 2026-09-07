@@ -443,7 +443,15 @@ Query: `status` (`ok`/`alerta`/`critico`/`negativo`), `categoria`, `ativo`, `cod
       "status": "critico",
       "deficit": 2,
       "ativo": true,
-      "codigo_barras": null
+      "codigo_barras": null,
+      "modo_controle": "quantidade",
+      "duracao_dias": null,
+      "duracao_atendimentos": null,
+      "unidade_aberta_em": null,
+      "atendimentos_desde_abertura": 0,
+      "dias_restantes": null,
+      "atendimentos_restantes": null,
+      "status_validade": null
     }
   ]
 }
@@ -459,7 +467,49 @@ tem que ser visível e distinto de "acabou", senão ela não sabe que deve **mai
 zero ao repor.
 
 `unidade` ∈ `un` · `ml` · `g` · `cx`.
-`categoria` ∈ `cilios` · `sobrancelha` · `limpeza_pele` · `descartavel` · `outro`.
+`categoria` ∈ `cilios` · `sobrancelha` · `limpeza_pele` · `micropigmentacao` ·
+`reconstrucao` · `descartavel` · `outro`.
+
+#### Validade por tempo ou por atendimentos — `DECIDIDO` (06/09/2026)
+
+Além do saldo em unidades (o padrão, `modo_controle: "quantidade"`), um item pode ser
+controlado por quanto dura a unidade **aberta** — ex.: "1 pote de creme dura 30 dias" ou
+"1 pote de creme rende 10 atendimentos" depois de aberto:
+
+- `modo_controle` ∈ `quantidade` · `validade_dias` · `validade_atendimentos`.
+- `duracao_dias` (obrigatório só em `validade_dias`) e `duracao_atendimentos`
+  (obrigatório só em `validade_atendimentos`) são a duração-alvo da unidade aberta.
+- `unidade_aberta_em` é o instante em que a unidade atual foi considerada aberta —
+  reabre (zera `atendimentos_desde_abertura` e reseta `unidade_aberta_em` para agora) a
+  cada `entrada` de movimentação, tratada como "abriu um pote novo".
+- `atendimentos_desde_abertura` incrementa em 1 por atendimento/uso que consome o item
+  (não por quantidade) quando `modo_controle = validade_atendimentos`.
+- `dias_restantes`, `atendimentos_restantes` e `status_validade` (`ok`/`alerta`/
+  `critico`, mesma régua de `status`) são **calculados a partir de `now()`**, por isso
+  não são coluna gerada do Postgres como `status`/`deficit` — o servidor calcula na
+  leitura (`GET /estoque/itens`, `POST`/`PATCH` de item) e devolve prontos, do mesmo
+  jeito que `status` já é: o cliente não recalcula.
+- Limiar de alerta: `alerta` quando restam ≤ 5 dias ou ≤ 3 atendimentos; `critico`
+  quando chegou a zero ou passou.
+- **Gera alerta** (implementado em 06/09/2026, sugestão de automação #1): toda chamada de
+  `GET /estoque/itens` espelha o `status_validade` calculado em uma linha de `alertas`
+  (`tipo` = `validade_proxima`/`validade_vencida`, `referencia_tipo` = `estoque_item`,
+  `chave_dedupe` = `validade:{item_id}` — upsert idempotente, resolve sozinho quando o
+  item volta a `ok`). Migração `010_alertas_tipo_validade.sql` estende o check
+  constraint de `alertas.tipo`. Chega na central de alertas/badge junto dos outros
+  tipos — falta só o canal WhatsApp/push desses dois tipos, que é `futuro` como para os
+  demais (ver A3 em `CLAUDE.md`).
+- Consumo por **kit** (`kits.montar`, implementado em 06/09/2026): agora incrementa
+  `atendimentos_desde_abertura` (pela quantidade de kits montados) para item em
+  `modo_controle = validade_atendimentos` na composição — mesmo raciocínio de
+  `atendimentos.finalizar`. Antes só o consumo de material em `atendimentos.finalizar` e
+  a saída manual em `estoque/movimentacoes` incrementavam.
+- `POST /estoque/itens/{id}/abrir` — `NOVO` (implementado em 06/09/2026, sugestão de
+  automação #3): marca "abri uma unidade nova" sem lançar `entrada` — caso em que ela
+  abre um pote/frasco que já tinha em estoque (não foi compra nova). Reseta
+  `unidade_aberta_em = now()` e `atendimentos_desde_abertura = 0`; `422` +
+  `VALIDACAO_INVALIDA` se o item estiver em `modo_controle = "quantidade"` (não existe
+  "unidade aberta" para reiniciar nesse modo). Sem corpo de requisição.
 
 #### Bipagem de código de barras — `DECIDIDO`
 
@@ -481,6 +531,11 @@ operações do módulo.
 
 Soft delete (`ativo = false`) quando o item já tem movimentação — apagar quebraria o
 histórico de custo dos atendimentos.
+
+`POST`/`PATCH` aceitam `modo_controle`, `duracao_dias`, `duracao_atendimentos` (ver
+"Validade por tempo ou por atendimentos" acima). `modo_controle` omitido vale
+`"quantidade"`. Cadastrar (ou trocar via `PATCH`) para um modo de validade abre a
+unidade agora (`unidade_aberta_em = now()`, `atendimentos_desde_abertura = 0`).
 
 ### `POST /estoque/itens/{id}/movimentacoes` — `NOVO`
 
@@ -825,6 +880,8 @@ Tipos de alerta na V1:
 | `saldo_negativo` | saldo do mês < 0 no fechamento parcial | `critico` |
 | `zero_a_zero` | saldo do mês < limite configurado | `alerta` |
 | `agendamento_publico_novo` | cliente marcou um atendimento pelo link (§10) | `info` |
+| `validade_proxima` | item por `validade_dias`/`validade_atendimentos` com `status_validade == alerta` (implementado 06/09/2026, ver §5) | `alerta` |
+| `validade_vencida` | item por `validade_dias`/`validade_atendimentos` com `status_validade == critico` (implementado 06/09/2026, ver §5) | `critico` |
 
 ### `GET /alertas` — `NOVO`
 
