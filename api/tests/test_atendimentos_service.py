@@ -142,6 +142,33 @@ class TestCriarListarObter:
         assert resultado["saldo_liquido"] == 100.0
 
 
+class TestCustoEstimadoAgendado:
+    def test_agendado_recebe_estimativa_sem_registrar_baixa(self):
+        servico_id = str(uuid.uuid4())
+        supabase = _fake_supabase({
+            "atendimento_servicos": [MagicMock(data=[{
+                "servico_id": servico_id, "nome_servico": "Extensão", "preco_snapshot": 300.0,
+            }])],
+            "atendimento_insumos": [MagicMock(data=[])],
+            "servico_produtos_padrao": [MagicMock(data=[{
+                "servico_id": servico_id, "item_estoque_id": ITEM_A, "quantidade": 2.0,
+            }])],
+            "estoque_itens": [MagicMock(data=[{"id": ITEM_A, "custo_medio": 12.5}])],
+        })
+
+        resultado = service._montar_saida(supabase, TEST_USER_ID, {
+            "id": ATENDIMENTO_ID,
+            "nome_cliente": "Cliente Teste",
+            "telefone_cliente": None,
+            "data": "2026-01-01T10:00:00-03:00",
+            "status": "agendado",
+        })
+
+        assert resultado["total_materiais"] == 0.0
+        assert resultado["custo_estimado"] == 25.0
+        assert resultado["saldo_estimado"] == 275.0
+
+
 class TestEditarExcluir:
     def test_editar_cancelado_bloqueia_409(self):
         supabase = _fake_supabase({

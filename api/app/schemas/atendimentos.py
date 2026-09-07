@@ -83,6 +83,8 @@ class AtendimentoOut(BaseModel):
     total_servicos: float
     total_materiais: float
     saldo: float
+    custo_estimado: float | None
+    saldo_estimado: float | None
 
 
 class AtendimentosPaginaOut(BaseModel):

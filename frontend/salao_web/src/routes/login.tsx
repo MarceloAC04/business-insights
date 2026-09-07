@@ -109,6 +109,7 @@ function LoginPage() {
                 id="email"
                 type="email"
                 autoComplete="email"
+                placeholder="voce@exemplo.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="h-12 rounded-xl"

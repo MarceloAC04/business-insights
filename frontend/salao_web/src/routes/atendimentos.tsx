@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
+  addMinutes,
   addMonths,
   eachDayOfInterval,
   endOfMonth,
@@ -109,7 +110,7 @@ export const Route = createFileRoute("/atendimentos")({
 const statusInfo: Record<StatusAtendimento, { label: string; tone: BadgeTone }> = {
   agendado: { label: "Agendado", tone: "brand" },
   finalizado: { label: "Finalizado", tone: "positive" },
-  cancelado: { label: "Cancelado", tone: "neutral" },
+  cancelado: { label: "Cancelado", tone: "negative" },
 };
 
 type Periodo = "mes" | "proximos" | "todos";
@@ -154,10 +155,31 @@ function nomesDosServicos(a: Atendimento): string {
   return a.servicos.map((s) => s.nome).join(" + ");
 }
 
+/**
+ * A duração pertence ao serviço cadastrado e pode estar ausente em serviços
+ * antigos. Nesse caso, a agenda mostra a lacuna em vez de sugerir um término
+ * que não foi informado.
+ */
+function intervaloHorario(
+  atendimento: Atendimento,
+  duracaoPorServico: Map<string, number | null>,
+): string {
+  const duracoes = atendimento.servicos.map((servico) =>
+    servico.servico_id ? (duracaoPorServico.get(servico.servico_id) ?? null) : null,
+  );
+  if (!duracoes.every((duracao): duracao is number => typeof duracao === "number" && duracao > 0)) {
+    return `${formatHora(atendimento.data)} · sem duração`;
+  }
+
+  const totalMinutos = duracoes.reduce((total, duracao) => total + duracao, 0);
+  const termino = addMinutes(new Date(atendimento.data), totalMinutos);
+  return `${formatHora(atendimento.data)}–${format(termino, "HH:mm")}`;
+}
+
 type Visao = "lista" | "calendario";
 
 function AtendimentosPage() {
-  const [visao, setVisao] = useState<Visao>("lista");
+  const [visao, setVisao] = useState<Visao>("calendario");
   const [filtroStatus, setFiltroStatus] = useState<"todos" | StatusAtendimento>("todos");
   const [periodo, setPeriodo] = useState<Periodo>("mes");
   const [mesCalendario, setMesCalendario] = useState(() => {
@@ -169,6 +191,12 @@ function AtendimentosPage() {
   const [editando, setEditando] = useState<Atendimento | null>(null);
   const [finalizar, setFinalizar] = useState<Atendimento | null>(null);
   const [cancelar, setCancelar] = useState<Atendimento | null>(null);
+  const [detalhe, setDetalhe] = useState<Atendimento | null>(null);
+  const { data: catalogo } = useServicos();
+  const duracaoPorServico = useMemo(
+    () => new Map((catalogo?.servicos ?? []).map((servico) => [servico.id, servico.duracao_minutos])),
+    [catalogo],
+  );
 
   // No calendário quem manda no período é o mês exibido, não o seletor "Este mês".
   const { inicio, fim } = useMemo(
@@ -187,7 +215,7 @@ function AtendimentosPage() {
   const cancelamento = useCancelarAtendimento();
 
   const lista = useMemo(
-    () => (data?.atendimentos ?? []).slice().sort((a, b) => b.data.localeCompare(a.data)),
+    () => (data?.atendimentos ?? []).slice().sort((a, b) => a.data.localeCompare(b.data)),
     [data],
   );
 
@@ -227,6 +255,7 @@ function AtendimentosPage() {
       }
       acaoLabel="Agendar atendimento"
       onAcao={abrirNovo}
+      conteudoAmplo
     >
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Tabs value={visao} onValueChange={(v) => setVisao(v as Visao)}>
@@ -278,13 +307,14 @@ function AtendimentosPage() {
           descricao={textoDoErro(error)}
         />
       ) : visao === "calendario" ? (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+        <div className="grid grid-cols-1 gap-4 lg:min-h-[calc(100dvh-11rem)] lg:grid-cols-[minmax(0,1fr)_340px]">
           <CalendarioMes
             mes={mesCalendario}
             onMudarMes={setMesCalendario}
             porDia={porDia}
             diaSelecionado={diaSelecionado}
             onSelecionarDia={setDiaSelecionado}
+            getHorario={(a) => intervaloHorario(a, duracaoPorServico)}
           />
           <div className="min-w-0">
             <SectionTitle>{formatDate(diaSelecionado)}</SectionTitle>
@@ -301,6 +331,8 @@ function AtendimentosPage() {
                   <AtendimentoCard
                     key={a.id}
                     atendimento={a}
+                    horario={intervaloHorario(a, duracaoPorServico)}
+                    onVerDetalhes={() => setDetalhe(a)}
                     onFinalizar={() => setFinalizar(a)}
                     onEditar={() => abrirEditar(a)}
                     onCancelar={() => setCancelar(a)}
@@ -323,6 +355,8 @@ function AtendimentosPage() {
             <AtendimentoCard
               key={a.id}
               atendimento={a}
+              horario={intervaloHorario(a, duracaoPorServico)}
+              onVerDetalhes={() => setDetalhe(a)}
               onFinalizar={() => setFinalizar(a)}
               onEditar={() => abrirEditar(a)}
               onCancelar={() => setCancelar(a)}
@@ -335,6 +369,11 @@ function AtendimentosPage() {
         aberto={formAberto}
         onFechar={() => setFormAberto(false)}
         atendimento={editando}
+      />
+      <DetalhesAtendimento
+        atendimento={detalhe}
+        duracaoPorServico={duracaoPorServico}
+        onFechar={() => setDetalhe(null)}
       />
       <DialogFinalizar atendimento={finalizar} onFechar={() => setFinalizar(null)} />
 
@@ -388,12 +427,14 @@ function CalendarioMes({
   porDia,
   diaSelecionado,
   onSelecionarDia,
+  getHorario,
 }: {
   mes: Date;
   onMudarMes: (d: Date) => void;
   porDia: Map<string, Atendimento[]>;
   diaSelecionado: string;
   onSelecionarDia: (iso: string) => void;
+  getHorario: (atendimento: Atendimento) => string;
 }) {
   const semanas = useMemo(() => {
     const inicio = startOfWeek(startOfMonth(mes), { weekStartsOn: 0 });
@@ -405,7 +446,7 @@ function CalendarioMes({
   }, [mes]);
 
   return (
-    <Card className="overflow-hidden p-0">
+    <Card className="flex flex-col overflow-hidden p-0 lg:h-full">
       <div className="flex items-center justify-between gap-2 border-b border-border p-3">
         <p className="font-display text-base font-semibold">
           {capitalizar(format(mes, "MMMM 'de' yyyy", { locale: ptBR }))}
@@ -445,7 +486,7 @@ function CalendarioMes({
         ))}
       </div>
 
-      <div className="grid grid-cols-7">
+      <div className="grid grid-cols-7 lg:min-h-0 lg:flex-1 lg:auto-rows-fr">
         {semanas.flatMap((semana) =>
           semana.map((dia) => {
             const iso = diaIso(dia);
@@ -459,7 +500,7 @@ function CalendarioMes({
                 type="button"
                 onClick={() => onSelecionarDia(iso)}
                 className={cn(
-                  "min-h-[64px] min-w-0 border-r border-b border-border p-1 text-left align-top last:border-r-0 sm:min-h-24 sm:p-1.5",
+                  "min-h-[64px] min-w-0 border-r border-b border-border p-1 text-left align-top last:border-r-0 sm:min-h-24 sm:p-1.5 lg:min-h-0",
                   foraDoMes && "bg-surface-2/60",
                   selecionado && "bg-accent/40 ring-1 ring-inset ring-primary",
                 )}
@@ -480,7 +521,8 @@ function CalendarioMes({
                       tone={statusInfo[a.status].tone}
                       className="block w-full truncate rounded px-1 py-0.5 text-left text-[9px] leading-tight sm:text-[10px]"
                     >
-                      {formatHora(a.data)} {a.cliente_nome}
+                      <span className="block truncate">{getHorario(a)}</span>
+                      <span className="hidden truncate sm:block">{a.cliente_nome}</span>
                     </Pill>
                   ))}
                   {doDia.length > MAX_CHIPS_POR_DIA ? (
@@ -500,56 +542,79 @@ function CalendarioMes({
 
 function AtendimentoCard({
   atendimento: a,
+  horario,
+  onVerDetalhes,
   onFinalizar,
   onEditar,
   onCancelar,
 }: {
   atendimento: Atendimento;
+  horario: string;
+  onVerDetalhes: () => void;
   onFinalizar: () => void;
   onEditar: () => void;
   onCancelar: () => void;
 }) {
+  const emAberto = a.status === "agendado";
+  const custo = emAberto ? a.custo_estimado : a.total_materiais;
+  const lucro = emAberto ? a.saldo_estimado : a.saldo;
+
   return (
     <Card className="p-4">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
-        <div className="min-w-0">
-          <p className="truncate font-display text-base font-semibold">{a.cliente_nome}</p>
-          <p className="mt-0.5 truncate text-sm text-muted-foreground">{nomesDosServicos(a)}</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {formatDate(a.data)} às {formatHora(a.data)}
-            {a.cliente_telefone ? ` • ${a.cliente_telefone}` : ""}
-          </p>
+      <button
+        type="button"
+        onClick={onVerDetalhes}
+        aria-label={`Ver detalhes do atendimento de ${a.cliente_nome}`}
+        className="block w-full cursor-pointer rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+          <div className="min-w-0">
+            <p className="truncate font-display text-base font-semibold">{a.cliente_nome}</p>
+            <p className="mt-0.5 truncate text-sm text-muted-foreground">{nomesDosServicos(a)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {formatDate(a.data)} • {horario}
+              {a.cliente_telefone ? ` • ${a.cliente_telefone}` : ""}
+            </p>
+          </div>
+          <Pill tone={statusInfo[a.status].tone}>{statusInfo[a.status].label}</Pill>
         </div>
-        <Pill tone={statusInfo[a.status].tone}>{statusInfo[a.status].label}</Pill>
-      </div>
 
-      {/* Os três números vêm prontos do servidor — a tela não subtrai nada. */}
-      <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-surface-2 p-3 text-center">
-        <div>
-          <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-            Cobrado
-          </p>
-          <Money value={a.total_servicos} className="text-sm" />
+        {/* Os valores reais e as previsões vêm prontos do servidor. */}
+        <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-surface-2 p-3 text-center">
+          <div>
+            <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+              Cobrado
+            </p>
+            <Money value={a.total_servicos} className="text-sm" />
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {emAberto ? "Custo estimado" : "Custo"}
+            </p>
+            {custo === null || custo === undefined ? (
+              <span className="text-xs text-muted-foreground">A confirmar</span>
+            ) : (
+              <Money value={custo} className="text-sm" />
+            )}
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {emAberto ? "Lucro estimado" : "Lucro"}
+            </p>
+            {lucro === null || lucro === undefined ? (
+              <span className="text-xs text-muted-foreground">A confirmar</span>
+            ) : (
+              <Money value={lucro} colorir className="text-sm" />
+            )}
+          </div>
         </div>
-        <div>
-          <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-            Custo
-          </p>
-          <Money value={a.total_materiais} className="text-sm" />
-        </div>
-        <div>
-          <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-            Lucro
-          </p>
-          <Money value={a.saldo} colorir className="text-sm" />
-        </div>
-      </div>
 
-      {a.materiais.length ? (
-        <p className="mt-2 truncate text-xs text-muted-foreground">
-          Produtos: {a.materiais.map((m) => `${m.nome} (${m.quantidade})`).join(", ")}
-        </p>
-      ) : null}
+        {a.materiais.length ? (
+          <p className="mt-2 truncate text-xs text-muted-foreground">
+            Produtos: {a.materiais.map((m) => `${m.nome} (${m.quantidade})`).join(", ")}
+          </p>
+        ) : null}
+      </button>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {a.status === "agendado" ? (
@@ -575,6 +640,124 @@ function AtendimentoCard({
         ) : null}
       </div>
     </Card>
+  );
+}
+
+function DetalhesAtendimento({
+  atendimento,
+  duracaoPorServico,
+  onFechar,
+}: {
+  atendimento: Atendimento | null;
+  duracaoPorServico: Map<string, number | null>;
+  onFechar: () => void;
+}) {
+  if (!atendimento) return null;
+
+  const horario = intervaloHorario(atendimento, duracaoPorServico);
+  const emAberto = atendimento.status === "agendado";
+  const custo = emAberto ? atendimento.custo_estimado : atendimento.total_materiais;
+  const lucro = emAberto ? atendimento.saldo_estimado : atendimento.saldo;
+
+  return (
+    <Dialog open onOpenChange={(aberto) => !aberto && onFechar()}>
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader className="pr-8">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <DialogTitle className="font-display">Detalhes do atendimento</DialogTitle>
+              <DialogDescription className="mt-1">
+                {formatDate(atendimento.data)} • {horario}
+              </DialogDescription>
+            </div>
+            <Pill tone={statusInfo[atendimento.status].tone}>
+              {statusInfo[atendimento.status].label}
+            </Pill>
+          </div>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <section className="rounded-xl bg-surface-2 p-3">
+            <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+              Cliente
+            </p>
+            <p className="mt-1 font-medium">{atendimento.cliente_nome}</p>
+            {atendimento.cliente_telefone ? (
+              <p className="mt-0.5 text-sm text-muted-foreground">{atendimento.cliente_telefone}</p>
+            ) : null}
+          </section>
+
+          <section>
+            <p className="mb-2 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+              Serviços
+            </p>
+            <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+              {atendimento.servicos.map((servico, indice) => (
+                <li key={`${servico.servico_id ?? servico.nome}-${indice}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                  <span className="min-w-0 truncate text-sm font-medium">{servico.nome}</span>
+                  <span className="shrink-0 text-sm text-muted-foreground">
+                    {formatBRL(servico.preco)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {atendimento.materiais.length ? (
+            <section>
+              <p className="mb-2 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                Produtos utilizados
+              </p>
+              <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+                {atendimento.materiais.map((material, indice) => (
+                  <li key={`${material.item_estoque_id ?? material.nome}-${indice}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <span className="min-w-0 text-sm font-medium">
+                      {material.nome} <span className="text-muted-foreground">× {material.quantidade}</span>
+                    </span>
+                    <span className="shrink-0 text-sm text-muted-foreground">
+                      {formatBRL(material.preco * material.quantidade)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          <div className="grid grid-cols-3 gap-2 rounded-xl bg-surface-2 p-3 text-center">
+            <div>
+              <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                Cobrado
+              </p>
+              <Money value={atendimento.total_servicos} className="text-sm" />
+            </div>
+            <div>
+              <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                {emAberto ? "Custo estimado" : "Custo"}
+              </p>
+              {custo === null || custo === undefined ? (
+                <span className="text-xs text-muted-foreground">A confirmar</span>
+              ) : (
+                <Money value={custo} className="text-sm" />
+              )}
+            </div>
+            <div>
+              <p className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                {emAberto ? "Lucro estimado" : "Lucro"}
+              </p>
+              {lucro === null || lucro === undefined ? (
+                <span className="text-xs text-muted-foreground">A confirmar</span>
+              ) : (
+                <Money value={lucro} colorir className="text-sm" />
+              )}
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button onClick={onFechar}>Fechar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

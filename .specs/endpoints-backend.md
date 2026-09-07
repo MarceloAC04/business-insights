@@ -157,15 +157,23 @@ Query: `inicio` (date), `fim` (date), `status` (opcional, csv), `pagina`, `taman
       ],
       "total_servicos": 180.00,
       "total_materiais": 35.00,
-      "saldo": 145.00
+      "saldo": 145.00,
+      "custo_estimado": null,
+      "saldo_estimado": null
     }
   ]
 }
 ```
 
-> `total_servicos`, `total_materiais` e `saldo` vêm **calculados do servidor**. Hoje o
+> `total_servicos`, `total_materiais`, `saldo`, `custo_estimado` e `saldo_estimado` vêm
+> **calculados do servidor**. Hoje o
 > app calcula com getters no model; passa a só exibir. Motivo: a mesma conta alimenta o
 > resumo, o alerta e o n8n — três lugares onde não pode divergir.
+
+Para atendimento `agendado`, `custo_estimado` e `saldo_estimado` usam a composição
+atual dos serviços e o `custo_medio` atual do estoque. São uma previsão visual: não
+baixam estoque, não entram nos totais financeiros e podem mudar até a finalização. Em
+`finalizado` e `cancelado`, ambos são `null`; o custo real é `total_materiais`.
 
 ### `POST /atendimentos` — `NOVO`
 

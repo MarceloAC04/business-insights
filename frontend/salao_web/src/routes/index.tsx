@@ -174,6 +174,7 @@ function ResumoPage() {
       subtitulo={`Resumo de ${nomeMes(mes)} de ${ano}`}
       acaoLabel="Agendar atendimento"
       onAcao={() => void navigate({ to: "/atendimentos" })}
+      conteudoAmplo
     >
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Select value={String(mes)} onValueChange={(v) => setMes(Number(v))}>

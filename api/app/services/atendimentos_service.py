@@ -82,6 +82,58 @@ def _buscar_atendimento(supabase: Client, user_id: str, atendimento_id: str) -> 
     return linhas[0]
 
 
+def _estimar_custo_insumos_agendados(supabase: Client, user_id: str, servicos: list[dict]) -> float | None:
+    """
+    Prevê o custo de um atendimento ainda agendado com a composição atual do
+    catálogo e o custo médio atual do estoque. Não grava nem baixa nada: na
+    finalização, a usuária pode alterar a composição e o custo real é congelado.
+    """
+    if any(servico["servico_id"] is None for servico in servicos):
+        return None
+
+    ids_servico = list({servico["servico_id"] for servico in servicos})
+    if not ids_servico:
+        return 0.0
+
+    resp_padrao = (
+        supabase.table("servico_produtos_padrao")
+        .select("servico_id, item_estoque_id, quantidade")
+        .in_("servico_id", ids_servico)
+        .execute()
+    )
+    produtos_por_servico: dict[str, list[dict]] = {}
+    for produto in rows(resp_padrao.data):
+        produtos_por_servico.setdefault(produto["servico_id"], []).append(produto)
+
+    ids_item = list(
+        {
+            produto["item_estoque_id"]
+            for produtos in produtos_por_servico.values()
+            for produto in produtos
+        }
+    )
+    if not ids_item:
+        return 0.0
+
+    resp_itens = (
+        supabase.table("estoque_itens")
+        .select("id, custo_medio")
+        .eq("user_id", user_id)
+        .in_("id", ids_item)
+        .execute()
+    )
+    custo_por_item = {item["id"]: item["custo_medio"] for item in rows(resp_itens.data)}
+
+    estimado = 0.0
+    for servico in servicos:
+        for produto in produtos_por_servico.get(servico["servico_id"], []):
+            custo_unitario = custo_por_item.get(produto["item_estoque_id"])
+            if custo_unitario is None:
+                return None
+            estimado += produto["quantidade"] * custo_unitario
+    return estimado
+
+
 def _montar_saida(supabase: Client, user_id: str, atendimento: dict) -> dict:
     aid = atendimento["id"]
     resp_serv = (
@@ -111,6 +163,11 @@ def _montar_saida(supabase: Client, user_id: str, atendimento: dict) -> dict:
     ]
     total_servicos = sum(s["preco"] for s in servicos)
     total_materiais = sum(m["preco"] * m["quantidade"] for m in materiais)
+    custo_estimado = (
+        _estimar_custo_insumos_agendados(supabase, user_id, servicos)
+        if atendimento["status"] == "agendado"
+        else None
+    )
     return {
         "id": aid,
         "cliente_nome": atendimento["nome_cliente"],
@@ -122,6 +179,8 @@ def _montar_saida(supabase: Client, user_id: str, atendimento: dict) -> dict:
         "total_servicos": total_servicos,
         "total_materiais": total_materiais,
         "saldo": total_servicos - total_materiais,
+        "custo_estimado": custo_estimado,
+        "saldo_estimado": total_servicos - custo_estimado if custo_estimado is not None else None,
     }
 
 

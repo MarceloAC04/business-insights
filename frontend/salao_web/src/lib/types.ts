@@ -109,6 +109,9 @@ export interface Atendimento {
   total_servicos: number;
   total_materiais: number;
   saldo: number;
+  /** Previsão dinâmica para agendados; o custo real só existe após finalizar. */
+  custo_estimado?: number | null;
+  saldo_estimado?: number | null;
 }
 
 export interface AtendimentosPagina {

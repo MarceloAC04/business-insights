@@ -86,12 +86,14 @@ export function AppShell({
   subtitulo,
   acaoLabel,
   onAcao,
+  conteudoAmplo = true,
   children,
 }: {
   titulo: string;
   subtitulo?: string;
   acaoLabel?: string;
   onAcao?: () => void;
+  conteudoAmplo?: boolean;
   children: ReactNode;
 }) {
   const autenticada = useGuard();
@@ -143,7 +145,12 @@ export function AppShell({
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Cabeçalho */}
         <header className="sticky top-0 z-30 border-b border-border bg-surface/90 backdrop-blur">
-          <div className="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 sm:px-6">
+          <div
+            className={cn(
+              "mx-auto grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 sm:px-6",
+              conteudoAmplo ? "max-w-none lg:px-5" : "max-w-6xl",
+            )}
+          >
             <div className="flex min-w-0 items-center gap-3">
               <span className="lg:hidden">
                 <Logo compacto />
@@ -180,7 +187,12 @@ export function AppShell({
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 pt-4 pb-28 sm:px-6 lg:pb-10">
+        <main
+          className={cn(
+            "mx-auto w-full flex-1 px-4 pt-4 pb-28 sm:px-6 lg:pb-10",
+            conteudoAmplo ? "max-w-none lg:px-5" : "max-w-6xl",
+          )}
+        >
           {critico ? (
             <Link
               to={rotaDoAlerta(critico)}
