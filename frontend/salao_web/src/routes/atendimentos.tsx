@@ -21,6 +21,7 @@ import {
   ChevronRight,
   List as ListIcon,
   Pencil,
+  Search,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -961,6 +962,7 @@ function DialogFinalizar({
   const [quantidades, setQuantidades] = useState<Record<string, number>>({});
   const [chave, setChave] = useState("");
   const [faltantes, setFaltantes] = useState<FaltanteEstoque[] | null>(null);
+  const [buscaOutrosProdutos, setBuscaOutrosProdutos] = useState("");
 
   const itens = estoque?.itens ?? [];
   const servicos = catalogo?.servicos ?? [];
@@ -979,6 +981,7 @@ function DialogFinalizar({
     });
     setQuantidades(inicial);
     setFaltantes(null);
+    setBuscaOutrosProdutos("");
   }
 
   if (!atendimento) return null;
@@ -998,6 +1001,10 @@ function DialogFinalizar({
     })
     .filter((grupo) => grupo.itens.length > 0);
   const outrosProdutos = itens.filter((i) => !idsAtribuidos.has(i.id));
+  const buscaOutrosNormalizada = buscaOutrosProdutos.trim().toLocaleLowerCase("pt-BR");
+  const outrosProdutosFiltrados = buscaOutrosNormalizada
+    ? outrosProdutos.filter((item) => item.nome.toLocaleLowerCase("pt-BR").includes(buscaOutrosNormalizada))
+    : outrosProdutos;
 
   // Sem anotar `MaterialEntrada[]`: a união com o material avulso (`nome`/`preco`)
   // apagaria `item_estoque_id` da prévia de custo logo abaixo. A conversão para o
@@ -1078,13 +1085,17 @@ function DialogFinalizar({
               <SectionTitle hint="Marque o que foi usado — o estoque é baixado automaticamente">
                 Produtos utilizados
               </SectionTitle>
-              <Accordion
-                type="multiple"
-                defaultValue={[...gruposDeProdutos.map((g) => g.id), "outros"]}
-              >
+              <Accordion type="multiple">
                 {gruposDeProdutos.map((grupo) => (
                   <AccordionItem key={grupo.id} value={grupo.id}>
-                    <AccordionTrigger>{grupo.nome}</AccordionTrigger>
+                    <AccordionTrigger>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate">{grupo.nome}</span>
+                        <Pill tone="neutral">
+                          {grupo.itens.length} {grupo.itens.length === 1 ? "item" : "itens"}
+                        </Pill>
+                      </span>
+                    </AccordionTrigger>
                     <AccordionContent>
                       <ListaDeProdutos
                         itens={grupo.itens}
@@ -1096,13 +1107,38 @@ function DialogFinalizar({
                 ))}
                 {outrosProdutos.length > 0 ? (
                   <AccordionItem value="outros">
-                    <AccordionTrigger>Outros produtos</AccordionTrigger>
+                    <AccordionTrigger>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate">Outros produtos</span>
+                        <Pill tone="neutral">
+                          {outrosProdutos.length} {outrosProdutos.length === 1 ? "item" : "itens"}
+                        </Pill>
+                      </span>
+                    </AccordionTrigger>
                     <AccordionContent>
-                      <ListaDeProdutos
-                        itens={outrosProdutos}
-                        quantidades={quantidades}
-                        onMudar={setQuantidades}
-                      />
+                      <div className="space-y-3">
+                        <div className="relative">
+                          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            value={buscaOutrosProdutos}
+                            onChange={(evento) => setBuscaOutrosProdutos(evento.target.value)}
+                            className="pl-9"
+                            placeholder="Buscar produto por nome"
+                            aria-label="Buscar outro produto por nome"
+                          />
+                        </div>
+                        {outrosProdutosFiltrados.length ? (
+                          <ListaDeProdutos
+                            itens={outrosProdutosFiltrados}
+                            quantidades={quantidades}
+                            onMudar={setQuantidades}
+                          />
+                        ) : (
+                          <p className="rounded-xl border border-dashed border-border p-3 text-center text-sm text-muted-foreground">
+                            Nenhum produto encontrado.
+                          </p>
+                        )}
+                      </div>
                     </AccordionContent>
                   </AccordionItem>
                 ) : null}

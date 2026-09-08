@@ -1,5 +1,5 @@
-import { Pencil, Plus, Scissors, Trash2, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { Pencil, Plus, Scissors, Search, Trash2, TriangleAlert } from "lucide-react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Card, EmptyState, ListSkeleton, Money, Pill, SectionTitle } from "@/components/ui-kit";
 import {
@@ -53,10 +53,20 @@ export function ServicosScreen() {
   const [aberto, setAberto] = useState(false);
   const [form, setForm] = useState<FormServico>({ nome: "", preco: "", duracao: "", produtos: [] });
   const [servicoParaExcluir, setServicoParaExcluir] = useState<Servico | null>(null);
+  const [buscaServico, setBuscaServico] = useState("");
+  const [buscaInsumo, setBuscaInsumo] = useState("");
 
   const itens = estoque?.itens ?? [];
   const servicos = listaServicos?.servicos ?? [];
   const salvando = criarServico.isPending || editarServico.isPending;
+  const servicosFiltrados = useMemo(() => {
+    const busca = buscaServico.trim().toLocaleLowerCase("pt-BR");
+    return busca ? servicos.filter((servico) => servico.nome.toLocaleLowerCase("pt-BR").includes(busca)) : servicos;
+  }, [buscaServico, servicos]);
+  const insumosFiltrados = useMemo(() => {
+    const busca = buscaInsumo.trim().toLocaleLowerCase("pt-BR");
+    return busca ? itens.filter((item) => item.nome.toLocaleLowerCase("pt-BR").includes(busca)) : itens;
+  }, [buscaInsumo, itens]);
 
   /** Prévia local pelo custo médio de hoje; o custo real fica congelado ao finalizar. */
   const custoInsumos = (produtos: FormServico["produtos"]) =>
@@ -67,6 +77,7 @@ export function ServicosScreen() {
 
   const abrirNovoServico = () => {
     setForm({ nome: "", preco: "", duracao: "", produtos: [] });
+    setBuscaInsumo("");
     setAberto(true);
   };
 
@@ -81,6 +92,7 @@ export function ServicosScreen() {
         quantidade: produto.quantidade,
       })),
     });
+    setBuscaInsumo("");
     setAberto(true);
   };
 
@@ -149,11 +161,23 @@ export function ServicosScreen() {
         >
           Serviços
         </SectionTitle>
+        {servicos.length ? (
+          <div className="relative mb-4">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={buscaServico}
+              onChange={(evento) => setBuscaServico(evento.target.value)}
+              className="pl-9"
+              placeholder="Buscar serviço por nome"
+              aria-label="Buscar serviço por nome"
+            />
+          </div>
+        ) : null}
         {carregandoServicos ? (
           <ListSkeleton />
-        ) : servicos.length ? (
+        ) : servicosFiltrados.length ? (
           <ul className="space-y-3">
-            {servicos.map((servico) => {
+            {servicosFiltrados.map((servico) => {
               const custo = custoInsumos(
                 servico.produtos_padrao.map((produto) => ({
                   item_estoque_id: produto.item_estoque_id,
@@ -207,9 +231,19 @@ export function ServicosScreen() {
         ) : (
           <EmptyState
             icon={<Scissors className="size-5" />}
-            titulo="Nenhum serviço cadastrado"
-            descricao="A tabela de preços alimenta o agendamento e o lucro por serviço."
-            acao={<Button onClick={abrirNovoServico}>Novo serviço</Button>}
+            titulo={servicos.length ? "Nenhum serviço encontrado" : "Nenhum serviço cadastrado"}
+            descricao={
+              servicos.length
+                ? "Tente ajustar a busca para encontrar o serviço."
+                : "A tabela de preços alimenta o agendamento e o lucro por serviço."
+            }
+            acao={
+              servicos.length ? (
+                <Button variant="outline" onClick={() => setBuscaServico("")}>Limpar busca</Button>
+              ) : (
+                <Button onClick={abrirNovoServico}>Novo serviço</Button>
+              )
+            }
           />
         )}
       </section>
@@ -257,10 +291,29 @@ export function ServicosScreen() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Insumos padrão</Label>
+              <div>
+                <Label>Insumos padrão por atendimento</Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Em produtos por usos, informe quantos usos o atendimento consome. Nos demais, informe a quantidade física.
+                </p>
+              </div>
+              <div className="relative">
+                <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={buscaInsumo}
+                  onChange={(evento) => setBuscaInsumo(evento.target.value)}
+                  className="pl-9"
+                  placeholder="Buscar produto por nome"
+                  aria-label="Buscar insumo por nome"
+                />
+              </div>
               <div className="max-h-52 space-y-1.5 overflow-y-auto rounded-xl border border-border p-2">
-                {itens.map((itemEstoque) => {
+                {insumosFiltrados.map((itemEstoque) => {
                   const item = form.produtos.find((produto) => produto.item_estoque_id === itemEstoque.id);
+                  const rotuloConsumo =
+                    itemEstoque.modo_controle === "rendimento_usos"
+                      ? "uso(s) por atendimento"
+                      : `${itemEstoque.unidade} por atendimento`;
                   return (
                     <div key={itemEstoque.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5">
                       <Checkbox
@@ -268,34 +321,48 @@ export function ServicosScreen() {
                         onCheckedChange={() => alternarInsumo(itemEstoque.id)}
                         aria-label={itemEstoque.nome}
                       />
-                      <span className="min-w-0 flex-1 truncate text-sm">{itemEstoque.nome}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm">{itemEstoque.nome}</span>
+                        <span className="block text-xs text-muted-foreground">{rotuloConsumo}</span>
+                      </span>
                       {item ? (
-                        <Input
-                          className="h-9 w-16"
-                          inputMode="decimal"
-                          value={String(item.quantidade)}
-                          onChange={(evento) =>
-                            setForm({
-                              ...form,
-                              produtos: form.produtos.map((produto) =>
-                                produto.item_estoque_id === itemEstoque.id
-                                  ? {
-                                      ...produto,
-                                      quantidade: Number(evento.target.value.replace(",", ".")) || 1,
-                                    }
-                                  : produto,
-                              ),
-                            })
-                          }
-                        />
+                        <div className="flex shrink-0 items-center gap-1">
+                          <Input
+                            className="h-9 w-16"
+                            inputMode="decimal"
+                            value={String(item.quantidade)}
+                            aria-label={`Quantidade de ${itemEstoque.nome} em ${rotuloConsumo}`}
+                            onChange={(evento) =>
+                              setForm({
+                                ...form,
+                                produtos: form.produtos.map((produto) =>
+                                  produto.item_estoque_id === itemEstoque.id
+                                    ? {
+                                        ...produto,
+                                        quantidade: Number(evento.target.value.replace(",", ".")) || 1,
+                                      }
+                                    : produto,
+                                ),
+                              })
+                            }
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            {itemEstoque.modo_controle === "rendimento_usos" ? "usos" : itemEstoque.unidade}
+                          </span>
+                        </div>
                       ) : (
-                        <span className="text-xs text-muted-foreground">
-                          {itemEstoque.modo_controle === "rendimento_usos" ? "usos" : itemEstoque.unidade}
-                        </span>
+                        <Pill tone={itemEstoque.modo_controle === "rendimento_usos" ? "brand" : "neutral"}>
+                          {itemEstoque.modo_controle === "rendimento_usos" ? "Por uso" : `Por ${itemEstoque.unidade}`}
+                        </Pill>
                       )}
                     </div>
                   );
                 })}
+                {insumosFiltrados.length === 0 ? (
+                  <p className="p-3 text-center text-sm text-muted-foreground">
+                    Nenhum produto encontrado.
+                  </p>
+                ) : null}
               </div>
               <p className="text-xs text-muted-foreground">
                 Custo estimado pelo custo médio de hoje: <Money value={custoInsumos(form.produtos)} />
