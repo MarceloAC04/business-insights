@@ -3,8 +3,9 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Boxes,
+  ClipboardCheck,
+  History,
   Package,
-  PackageOpen,
   PackagePlus,
   Plus,
   ScanBarcode,
@@ -50,7 +51,6 @@ import { formatBRL, formatDateTime, formatMoedaInput, parseMoedaInput } from "@/
 import { EstoqueApi } from "@/lib/api/estoque";
 import {
   textoDoErro,
-  useAbrirUnidade,
   useCriarItem,
   useCriarKit,
   useCriarMovimentacao,
@@ -126,19 +126,11 @@ const CATEGORIAS: { valor: CategoriaEstoque; label: string }[] = [
 const MODOS_CONTROLE: { valor: ModoControleEstoque; label: string; hint: string }[] = [
   { valor: "quantidade", label: "Só por saldo", hint: "Avisa quando o saldo chega no mínimo." },
   {
-    valor: "validade_dias",
-    label: "Por validade (dias)",
-    hint: "Ex.: 1 pote de creme dura tantos dias depois de aberto.",
-  },
-  {
-    valor: "validade_atendimentos",
-    label: "Por atendimentos",
-    hint: "Ex.: 1 pote de creme rende tantos atendimentos depois de aberto.",
+    valor: "rendimento_usos",
+    label: "Pote ou frasco que rende usos",
+    hint: "Ex.: 6 potes que rendem 10 usos cada aparecem como 60 usos disponíveis.",
   },
 ];
-
-/** `status_validade` reaproveita as cores de `StatusEstoque` — mesma leitura, outra régua. */
-const tomValidade: Record<"ok" | "alerta" | "critico" | "negativo", BadgeTone> = tomStatus;
 
 const FORMAS: { valor: FormaPagamento; label: string }[] = [
   { valor: "a_vista", label: "À vista" },
@@ -148,57 +140,6 @@ const FORMAS: { valor: FormaPagamento; label: string }[] = [
 ];
 
 const rotuloCategoria = new Map(CATEGORIAS.map((c) => [c.valor, c.label]));
-
-/**
- * Sugestão de automação #4 (06/09/2026): a maior parte do trabalho de
- * classificar um item novo (mesmo critério da migração 009 — equipamento
- * fica em "quantidade", pote/frasco que se gasta por uso vira "atendimentos",
- * o que resseca pelo tempo aberto vira "dias") já dá para adivinhar pelo
- * nome. Reduz o cadastro a "confirmar", não "decidir do zero" — só sugere;
- * a usuária pode trocar o select livremente, e trocar manualmente uma vez
- * já desliga a sugestão automática para aquele cadastro (ver `modoTocado`).
- */
-const PALAVRAS_ATENDIMENTOS = [
-  "cola",
-  "henna",
-  "cera",
-  "pigmento",
-  "anestés",
-  "sérum",
-  "serum",
-  "linha",
-];
-const PALAVRAS_DIAS = [
-  "espuma",
-  "tônico",
-  "tonico",
-  "gel",
-  "esfoliante",
-  "máscara",
-  "mascara",
-  "emoliente",
-  "shampoo",
-  "óleo",
-  "oleo",
-  "primer",
-  "finalizador",
-];
-
-function sugerirModoControle(nome: string): {
-  modoControle: ModoControleEstoque;
-  duracaoDias: string;
-  duracaoAtendimentos: string;
-} {
-  const alvo = nome.trim().toLowerCase();
-  if (!alvo) return { modoControle: "quantidade", duracaoDias: "", duracaoAtendimentos: "" };
-  if (PALAVRAS_ATENDIMENTOS.some((p) => alvo.includes(p))) {
-    return { modoControle: "validade_atendimentos", duracaoDias: "", duracaoAtendimentos: "15" };
-  }
-  if (PALAVRAS_DIAS.some((p) => alvo.includes(p))) {
-    return { modoControle: "validade_dias", duracaoDias: "45", duracaoAtendimentos: "" };
-  }
-  return { modoControle: "quantidade", duracaoDias: "", duracaoAtendimentos: "" };
-}
 
 function EstoquePage() {
   const { data: estoque, isPending, isError, error } = useEstoque();
@@ -210,12 +151,13 @@ function EstoquePage() {
   const criarKit = useCriarKit();
   const montar = useMontarKit();
   const vender = useVenderKit();
-  const abrirUnidade = useAbrirUnidade();
 
   const [entradaItem, setEntradaItem] = useState<ItemEstoque | null>(null);
   const [saidaItem, setSaidaItem] = useState<ItemEstoque | null>(null);
+  const [detalheItem, setDetalheItem] = useState<ItemEstoque | null>(null);
   const [tipoSaida, setTipoSaida] = useState<Exclude<TipoMovimentacao, "entrada">>("saida");
   const [qtd, setQtd] = useState("1");
+  const [usosParciais, setUsosParciais] = useState("0");
   const [custo, setCusto] = useState("");
   const [motivo, setMotivo] = useState("");
 
@@ -238,12 +180,10 @@ function EstoquePage() {
     custo: "",
     codigoBarras: null as string | null,
     modoControle: "quantidade" as ModoControleEstoque,
-    duracaoDias: "",
-    duracaoAtendimentos: "",
+    usosPorUnidade: "",
+    usosMinimos: "",
   };
   const [formItem, setFormItem] = useState(formItemInicial);
-  // Enquanto ela não escolher o modo à mão, o nome digitado sugere um — ver `sugerirModoControle`.
-  const [modoTocado, setModoTocado] = useState(false);
 
   const [bipando, setBipando] = useState(false);
   const [buscandoCodigo, setBuscandoCodigo] = useState(false);
@@ -256,17 +196,26 @@ function EstoquePage() {
   }>({ nome: "", precoVenda: "", itens: [] });
 
   const itens = useMemo(() => estoque?.itens ?? [], [estoque]);
+  const planejamento = estoque?.planejamento_reposicao ?? [];
+  // Kits ainda consomem embalagens físicas (etapa 4). Não misturar com o
+  // controle por usos evita que uma composição antiga tenha significado duplo.
+  const itensParaKit = useMemo(
+    () => itens.filter((item) => item.modo_controle !== "rendimento_usos"),
+    [itens],
+  );
   const kits = listaKits?.kits ?? [];
 
-  // Quem está mais perto de acabar primeiro. `status` é do servidor; a ordem, da tela.
+  // Quem está mais perto de acabar primeiro. Rendimento usa a capacidade de usos.
   const ordenados = useMemo(
     () =>
       itens
         .slice()
         .sort(
           (a, b) =>
-            a.quantidade_atual / (a.quantidade_minima || 1) -
-            b.quantidade_atual / (b.quantidade_minima || 1),
+            (a.usos_disponiveis ?? a.quantidade_atual) /
+              ((a.usos_minimos ?? a.quantidade_minima) || 1) -
+            (b.usos_disponiveis ?? b.quantidade_atual) /
+              ((b.usos_minimos ?? b.quantidade_minima) || 1),
         ),
     [itens],
   );
@@ -280,25 +229,50 @@ function EstoquePage() {
     setMotivo("Compra");
   };
 
-  const abrirSaida = (p: ItemEstoque) => {
+  const abrirSaida = (p: ItemEstoque, tipo: "saida" | "ajuste" = "saida") => {
     setSaidaItem(p);
-    setTipoSaida("saida");
-    setQtd("1");
+    setTipoSaida(tipo);
+    if (tipo === "ajuste" && p.modo_controle === "rendimento_usos") {
+      const embalagensInteiras = Math.floor(p.quantidade_atual);
+      const usosDaParcial = (p.quantidade_atual - embalagensInteiras) * (p.usos_por_unidade ?? 1);
+      setQtd(String(embalagensInteiras));
+      setUsosParciais(String(Number(usosDaParcial.toFixed(3))));
+    } else {
+      setQtd(tipo === "ajuste" ? "" : "1");
+      setUsosParciais("0");
+    }
     setMotivo("");
   };
 
-  const marcarUnidadeAberta = (p: ItemEstoque) => {
-    abrirUnidade.mutate(p.id, {
-      onSuccess: () => toast.success(`${p.nome}: contagem de validade reiniciada.`),
-      onError: (erro) => toast.error(textoDoErro(erro)),
-    });
-  };
+  const quantidadeEmbalagens = qtd.trim() === "" ? NaN : Number(qtd.replace(",", "."));
+  const usosParciaisInformados = usosParciais.trim() === "" ? NaN : Number(usosParciais.replace(",", "."));
+  const contagemParcialPorUsos =
+    saidaItem?.modo_controle === "rendimento_usos" && tipoSaida === "ajuste";
+  const quantidadeInformada = contagemParcialPorUsos
+    ? quantidadeEmbalagens + usosParciaisInformados / (saidaItem?.usos_por_unidade ?? 1)
+    : quantidadeEmbalagens;
+  const quantidadeValida =
+    Number.isFinite(quantidadeInformada) &&
+    (saidaItem && tipoSaida === "ajuste" ? quantidadeInformada >= 0 : quantidadeInformada > 0) &&
+    (!contagemParcialPorUsos ||
+      (Number.isInteger(quantidadeEmbalagens) &&
+        quantidadeEmbalagens >= 0 &&
+        Number.isFinite(usosParciaisInformados) &&
+        usosParciaisInformados >= 0 &&
+        usosParciaisInformados < (saidaItem?.usos_por_unidade ?? 1)));
+  const saldoPrevisto = entradaItem
+    ? entradaItem.quantidade_atual + quantidadeInformada
+    : saidaItem && tipoSaida === "saida"
+      ? saidaItem.quantidade_atual - quantidadeInformada
+      : quantidadeInformada;
+  const quantidadeFormatada = (valor: number) =>
+    valor.toLocaleString("pt-BR", { maximumFractionDigits: 3 });
 
   const confirmarEntrada = () => {
     if (!entradaItem) return;
-    const quantidade = Number(qtd.replace(",", "."));
+    const quantidade = quantidadeInformada;
     const custoUnitario = parseMoedaInput(custo);
-    if (!(quantidade > 0) || !(custoUnitario >= 0)) {
+    if (!quantidadeValida || !Number.isFinite(custoUnitario) || custoUnitario < 0) {
       toast.error("Informe quantidade e custo válidos.");
       return;
     }
@@ -315,7 +289,7 @@ function EstoquePage() {
       },
       {
         onSuccess: () => {
-          toast.success(`Entrada registrada em ${entradaItem.nome}.`);
+          toast.success(`Compra adicionada ao estoque de ${entradaItem.nome}.`);
           setEntradaItem(null);
         },
         onError: (erro) => toast.error(textoDoErro(erro)),
@@ -325,9 +299,17 @@ function EstoquePage() {
 
   const confirmarSaida = () => {
     if (!saidaItem) return;
-    const quantidade = Number(qtd.replace(",", "."));
-    if (!(quantidade > 0)) {
-      toast.error("Informe uma quantidade válida.");
+    const quantidade = quantidadeInformada;
+    if (!quantidadeValida) {
+      toast.error(
+        tipoSaida === "ajuste"
+          ? "Informe quanto restou, inclusive zero."
+          : "Informe uma quantidade maior que zero.",
+      );
+      return;
+    }
+    if (tipoSaida === "saida" && quantidade > saidaItem.quantidade_atual) {
+      toast.error("A saída é maior que o saldo disponível. Confira a quantidade em estoque.");
       return;
     }
     movimentacao.mutate(
@@ -336,13 +318,18 @@ function EstoquePage() {
         body: {
           tipo: tipoSaida,
           quantidade,
-          motivo: motivo.trim() || (tipoSaida === "saida" ? "Saída manual" : "Contagem"),
+          motivo:
+            motivo.trim() || (tipoSaida === "saida" ? "Saída manual" : "Conferência de estoque"),
         },
       },
       {
         onSuccess: () => {
           toast.success(
-            tipoSaida === "saida" ? "Saída registrada." : "Saldo ajustado pela contagem.",
+            tipoSaida === "saida"
+              ? "Saída registrada."
+              : saidaItem.modo_controle === "rendimento_usos"
+                ? `Contagem atualizada para ${quantidadeFormatada(quantidade * (saidaItem.usos_por_unidade ?? 1))} usos.`
+                : `Quantidade atualizada para ${quantidadeFormatada(quantidade)} ${saidaItem.unidade}.`,
           );
           setSaidaItem(null);
         },
@@ -359,35 +346,33 @@ function EstoquePage() {
       toast.error("Informe nome, quantidade e custo do produto.");
       return;
     }
-    const duracaoDias = Number(formItem.duracaoDias.replace(",", "."));
-    const duracaoAtendimentos = Number(formItem.duracaoAtendimentos.replace(",", "."));
-    if (formItem.modoControle === "validade_dias" && !(duracaoDias > 0)) {
-      toast.error("Informe depois de quantos dias a unidade aberta acaba.");
-      return;
-    }
-    if (formItem.modoControle === "validade_atendimentos" && !(duracaoAtendimentos > 0)) {
-      toast.error("Informe depois de quantos atendimentos a unidade aberta acaba.");
+    const usosPorUnidade = Number(formItem.usosPorUnidade.replace(",", "."));
+    const usosMinimos = Number(formItem.usosMinimos.replace(",", "."));
+    if (formItem.modoControle === "rendimento_usos" && !(usosPorUnidade > 0)) {
+      toast.error("Informe quantos usos cada pote ou frasco rende.");
       return;
     }
     criarItem.mutate(
       {
         nome: formItem.nome.trim(),
         categoria: formItem.categoria,
-        unidade: formItem.unidade,
+        unidade: formItem.modoControle === "rendimento_usos" ? "un" : formItem.unidade,
         quantidade_atual: quantidade,
-        quantidade_minima: Number.isFinite(minimo) ? minimo : 1,
+        quantidade_minima:
+          formItem.modoControle === "rendimento_usos" ? 0 : Number.isFinite(minimo) ? minimo : 1,
         custo_unitario: custoUnitario,
         codigo_barras: formItem.codigoBarras,
         modo_controle: formItem.modoControle,
-        duracao_dias: formItem.modoControle === "validade_dias" ? duracaoDias : null,
-        duracao_atendimentos:
-          formItem.modoControle === "validade_atendimentos" ? duracaoAtendimentos : null,
+        usos_por_unidade: formItem.modoControle === "rendimento_usos" ? usosPorUnidade : null,
+        usos_minimos:
+          formItem.modoControle === "rendimento_usos" && Number.isFinite(usosMinimos)
+            ? usosMinimos
+            : 0,
       },
       {
         onSuccess: () => {
           setItemAberto(false);
           setFormItem(formItemInicial);
-          setModoTocado(false);
           toast.success("Produto cadastrado no estoque.");
         },
         onError: (erro) => toast.error(textoDoErro(erro)),
@@ -543,10 +528,45 @@ function EstoquePage() {
         </TabsList>
 
         <TabsContent value="produtos" className="mt-4">
+          {planejamento.length ? (
+            <Card tone="warning" className="mb-4 p-4">
+              <SectionTitle hint="Baseada na agenda, no seu mínimo e no consumo dos últimos 30 dias">
+                Lista de compras sugerida
+              </SectionTitle>
+              <ul className="mt-3 space-y-3">
+                {planejamento.slice(0, 5).map((item) => (
+                  <li key={item.item_id} className="rounded-xl bg-warning/10 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="flex items-center gap-2 text-sm font-semibold">
+                          <ShoppingBag className="size-4 shrink-0 text-warning" />
+                          <span className="truncate">{item.nome}</span>
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">{item.base_calculo}</p>
+                      </div>
+                      <Pill tone="warning">
+                        {item.embalagens_sugeridas
+                          ? `${item.embalagens_sugeridas} embalagem(ns)`
+                          : `${quantidadeFormatada(item.quantidade_sugerida)} ${item.unidade_consumo}(s)`}
+                      </Pill>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 text-xs text-muted-foreground">
+                Esta lista não altera seu cadastro nem cria um gasto automaticamente.
+              </p>
+            </Card>
+          ) : null}
           <SectionTitle
             hint="Bipe a embalagem para reconhecer o produto ou cadastrar um novo"
             action={
-              <Button size="sm" variant="outline" onClick={() => setBipando(true)} disabled={buscandoCodigo}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setBipando(true)}
+                disabled={buscandoCodigo}
+              >
                 <ScanBarcode className="size-4" />
                 Bipar
               </Button>
@@ -571,27 +591,26 @@ function EstoquePage() {
                       <div className="min-w-0">
                         <p className="truncate font-semibold">{p.nome}</p>
                         <p className="mt-0.5 text-xs text-muted-foreground">
-                          {rotuloCategoria.get(p.categoria) ?? p.categoria} • mínimo{" "}
-                          {p.quantidade_minima} {p.unidade}
+                          {rotuloCategoria.get(p.categoria) ?? p.categoria} •{" "}
+                          {p.modo_controle === "rendimento_usos"
+                            ? `cada embalagem rende ${quantidadeFormatada(p.usos_por_unidade ?? 0)} usos`
+                            : `mínimo ${p.quantidade_minima} ${p.unidade}`}
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                          <Pill tone={tomStatus[p.status]}>{rotuloStatus[p.status]}</Pill>
-                          <Pill>Custo médio {formatBRL(p.custo_medio)}</Pill>
-                          {p.deficit > 0 ? <Pill tone="warning">Faltam {p.deficit}</Pill> : null}
-                          {p.modo_controle === "validade_dias" && p.dias_restantes !== null ? (
-                            <Pill tone={tomValidade[p.status_validade ?? "ok"]}>
-                              {p.dias_restantes > 0
-                                ? `Acaba em ${p.dias_restantes} dia(s)`
-                                : "Validade vencida"}
-                            </Pill>
-                          ) : null}
-                          {p.modo_controle === "validade_atendimentos" &&
-                          p.atendimentos_restantes !== null ? (
-                            <Pill tone={tomValidade[p.status_validade ?? "ok"]}>
-                              {p.atendimentos_restantes > 0
-                                ? `Acaba em ${p.atendimentos_restantes} atendimento(s)`
-                                : "Validade vencida"}
-                            </Pill>
+                          <Pill tone={tomStatus[p.status_rendimento ?? p.status]}>
+                            {p.modo_controle === "rendimento_usos"
+                              ? rotuloStatus[p.status_rendimento ?? p.status].replace("Saldo", "Usos")
+                              : rotuloStatus[p.status]}
+                          </Pill>
+                          <Pill>
+                            {p.modo_controle === "rendimento_usos"
+                              ? `Custo por uso ${formatBRL(p.custo_por_uso ?? 0)}`
+                              : `Custo médio ${formatBRL(p.custo_medio)}`}
+                          </Pill>
+                          {p.modo_controle === "rendimento_usos" && (p.deficit_usos ?? 0) > 0 ? (
+                            <Pill tone="warning">Faltam {quantidadeFormatada(p.deficit_usos ?? 0)} usos</Pill>
+                          ) : p.deficit > 0 ? (
+                            <Pill tone="warning">Faltam {p.deficit}</Pill>
                           ) : null}
                         </div>
                       </div>
@@ -599,47 +618,40 @@ function EstoquePage() {
                         <p
                           className={
                             "font-display text-2xl font-semibold tabular-nums " +
-                            (p.status === "negativo" || p.status === "critico"
+                            ((p.status_rendimento ?? p.status) === "negativo" ||
+                            (p.status_rendimento ?? p.status) === "critico"
                               ? "text-negative"
-                              : p.status === "alerta"
+                              : (p.status_rendimento ?? p.status) === "alerta"
                                 ? "text-warning"
                                 : "text-foreground")
                           }
                         >
-                          {p.quantidade_atual}
+                          {quantidadeFormatada(p.usos_disponiveis ?? p.quantidade_atual)}
                         </p>
-                        <p className="text-[11px] text-muted-foreground">{p.unidade}</p>
-                        <div className="mt-2 flex justify-end gap-1">
-                          {p.modo_controle !== "quantidade" ? (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              aria-label="Abri agora (reinicia a validade sem compra)"
-                              title="Abri agora — abriu uma unidade que já tinha, sem comprar"
-                              onClick={() => marcarUnidadeAberta(p)}
-                              disabled={abrirUnidade.isPending}
-                            >
-                              <PackageOpen className="size-4 text-brand" />
-                            </Button>
-                          ) : null}
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label="Registrar entrada"
-                            onClick={() => abrirEntrada(p)}
-                          >
-                            <ArrowDownToLine className="size-4 text-positive" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label="Registrar saída"
-                            onClick={() => abrirSaida(p)}
-                          >
-                            <ArrowUpFromLine className="size-4 text-primary" />
-                          </Button>
-                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          {p.modo_controle === "rendimento_usos"
+                            ? `usos • ${quantidadeFormatada(p.quantidade_atual)} embalagem(ns)`
+                            : p.unidade}
+                        </p>
                       </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-3">
+                      <Button size="sm" onClick={() => abrirEntrada(p)}>
+                        <ArrowDownToLine className="size-4" />
+                        {p.modo_controle === "rendimento_usos" ? "Adicionar embalagem" : "Adicionar compra"}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => abrirSaida(p)}>
+                        <ArrowUpFromLine className="size-4" />
+                        Registrar perda/saída
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => abrirSaida(p, "ajuste")}>
+                        <ClipboardCheck className="size-4" />
+                        {p.modo_controle === "rendimento_usos" ? "Conferir embalagens" : "Conferir quantidade"}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setDetalheItem(p)}>
+                        <History className="size-4" />
+                        Ver detalhes
+                      </Button>
                     </div>
                   </Card>
                 </li>
@@ -710,7 +722,9 @@ function EstoquePage() {
                             onClick={() => {
                               setKitParaVender(k);
                               setQtdVenda("1");
-                              setPrecoVenda(formatMoedaInput(String(Math.round(k.preco_venda * 100))));
+                              setPrecoVenda(
+                                formatMoedaInput(String(Math.round(k.preco_venda * 100))),
+                              );
                               setFormaVenda("pix");
                             }}
                           >
@@ -752,8 +766,11 @@ function EstoquePage() {
                         m.tipo === "entrada" ? "positive" : m.tipo === "saida" ? "neutral" : "brand"
                       }
                     >
-                      {m.tipo === "entrada" ? "+" : m.tipo === "saida" ? "−" : "="}
-                      {m.quantidade}
+                      {m.quantidade_consumida != null && m.unidade_consumo === "uso"
+                        ? `${m.tipo === "entrada" ? "+" : m.tipo === "saida" ? "−" : "Ajuste: "}${quantidadeFormatada(m.quantidade_consumida)} uso(s)`
+                        : m.saldo_anterior != null && m.saldo_atual != null
+                        ? `${quantidadeFormatada(m.saldo_anterior)} → ${quantidadeFormatada(m.saldo_atual)}`
+                        : `${m.tipo === "entrada" ? "+" : m.tipo === "saida" ? "−" : "Ajuste: "}${quantidadeFormatada(m.quantidade)}`}
                     </Pill>
                   </li>
                 ))}
@@ -769,18 +786,95 @@ function EstoquePage() {
         </TabsContent>
       </Tabs>
 
+      <Dialog open={detalheItem !== null} onOpenChange={(aberto) => !aberto && setDetalheItem(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{detalheItem?.nome}</DialogTitle>
+            <DialogDescription>
+              {detalheItem?.modo_controle === "rendimento_usos"
+                ? `Cada embalagem rende ${quantidadeFormatada(detalheItem.usos_por_unidade ?? 0)} usos.`
+                : `Controle por ${detalheItem?.unidade}.`}
+            </DialogDescription>
+          </DialogHeader>
+          {detalheItem ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 rounded-xl bg-muted p-3 text-sm">
+                <div>
+                  <p className="text-muted-foreground">Saldo atual</p>
+                  <p className="font-semibold">
+                    {detalheItem.modo_controle === "rendimento_usos"
+                      ? `${quantidadeFormatada(detalheItem.usos_disponiveis ?? 0)} usos`
+                      : `${quantidadeFormatada(detalheItem.quantidade_atual)} ${detalheItem.unidade}`}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Custo estimado</p>
+                  <p className="font-semibold">
+                    {detalheItem.modo_controle === "rendimento_usos"
+                      ? `${formatBRL(detalheItem.custo_por_uso ?? 0)} por uso`
+                      : `${formatBRL(detalheItem.custo_medio)} por ${detalheItem.unidade}`}
+                  </p>
+                </div>
+              </div>
+              <div>
+                <p className="mb-2 text-sm font-medium">Últimas movimentações</p>
+                {(historico?.movimentacoes.filter((m) => m.item_id === detalheItem.id) ?? []).length ? (
+                  <ul className="max-h-52 divide-y divide-border overflow-y-auto rounded-xl border border-border px-3">
+                    {historico?.movimentacoes
+                      .filter((m) => m.item_id === detalheItem.id)
+                      .slice(0, 10)
+                      .map((m) => (
+                        <li key={m.id} className="py-2 text-sm">
+                          <p>{m.motivo}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatDateTime(m.criado_em)} • {m.quantidade_consumida != null && m.unidade_consumo === "uso"
+                              ? `${quantidadeFormatada(m.quantidade_consumida)} uso(s)`
+                              : `${quantidadeFormatada(m.quantidade)} ${detalheItem.unidade}`}
+                          </p>
+                        </li>
+                      ))}
+                  </ul>
+                ) : (
+                  <p className="rounded-xl border border-dashed border-border p-3 text-sm text-muted-foreground">
+                    Ainda não há movimentações para este produto.
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDetalheItem(null)}>Fechar</Button>
+            {detalheItem ? (
+              <Button
+                onClick={() => {
+                  const item = detalheItem;
+                  setDetalheItem(null);
+                  abrirSaida(item, "ajuste");
+                }}
+              >
+                <ClipboardCheck className="size-4" />
+                Conferir saldo
+              </Button>
+            ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Entrada */}
       <Dialog open={entradaItem !== null} onOpenChange={(o) => !o && setEntradaItem(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Entrada de estoque</DialogTitle>
+            <DialogTitle>Adicionar compra</DialogTitle>
             <DialogDescription>
-              {entradaItem?.nome} — o custo médio ponderado é recalculado automaticamente.
+              {entradaItem?.nome} — saldo atual {entradaItem?.quantidade_atual}{" "}
+              {entradaItem?.modo_controle === "rendimento_usos" ? "embalagem(ns)" : entradaItem?.unidade}. Informe o que chegou para acrescentar ao estoque.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="qtd-entrada">Quantidade</Label>
+              <Label htmlFor="qtd-entrada">
+                Quantidade comprada ({entradaItem?.modo_controle === "rendimento_usos" ? "embalagens" : entradaItem?.unidade})
+              </Label>
               <Input
                 id="qtd-entrada"
                 inputMode="decimal"
@@ -789,7 +883,9 @@ function EstoquePage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="custo-entrada">Custo unitário (R$)</Label>
+              <Label htmlFor="custo-entrada">
+                Preço por {entradaItem?.modo_controle === "rendimento_usos" ? "embalagem" : entradaItem?.unidade} (R$)
+              </Label>
               <Input
                 id="custo-entrada"
                 inputMode="decimal"
@@ -807,6 +903,13 @@ function EstoquePage() {
               />
             </div>
           </div>
+          {quantidadeValida && entradaItem ? (
+            <p role="status" className="rounded-xl bg-muted p-3 text-sm">
+              Prévia: {quantidadeFormatada(entradaItem.quantidade_atual)} +{" "}
+              {quantidadeFormatada(quantidadeInformada)} = {quantidadeFormatada(saldoPrevisto)}{" "}
+              {entradaItem.modo_controle === "rendimento_usos" ? "embalagens" : entradaItem.unidade} em estoque.
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -815,8 +918,13 @@ function EstoquePage() {
             >
               Cancelar
             </Button>
-            <Button onClick={confirmarEntrada} disabled={movimentacao.isPending}>
-              Registrar entrada
+            <Button
+              onClick={confirmarEntrada}
+              disabled={movimentacao.isPending || !quantidadeValida}
+            >
+              {quantidadeValida
+                ? `Adicionar ${quantidadeFormatada(quantidadeInformada)} ${entradaItem?.modo_controle === "rendimento_usos" ? "embalagem(ns)" : entradaItem?.unidade ?? ""}`
+                : "Adicionar compra"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -826,38 +934,50 @@ function EstoquePage() {
       <Dialog open={saidaItem !== null} onOpenChange={(o) => !o && setSaidaItem(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Movimentar estoque</DialogTitle>
+            <DialogTitle>
+              {tipoSaida === "ajuste" ? "Conferir quantidade" : "Registrar saída"}
+            </DialogTitle>
             <DialogDescription>
-              {saidaItem?.nome} — saldo atual {saidaItem?.quantidade_atual} {saidaItem?.unidade}.
+              {saidaItem?.nome} — saldo atual {saidaItem?.quantidade_atual}{" "}
+              {saidaItem?.modo_controle === "rendimento_usos" ? "embalagem(ns)" : saidaItem?.unidade}.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>Tipo</Label>
-              <Select value={tipoSaida} onValueChange={(v) => setTipoSaida(v as typeof tipoSaida)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="saida">Saída (uso ou perda)</SelectItem>
-                  <SelectItem value="ajuste">Ajuste (contagem)</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
                 {tipoSaida === "saida"
-                  ? "Subtrai do saldo. Saldo não se edita: corrigir é lançar um ajuste."
-                  : "Define o saldo como o valor contado."}
-              </p>
-            </div>
+                ? "Informe o que saiu por perda, descarte ou devolução. Produtos já descontados ao finalizar um atendimento não precisam de outra saída."
+                : "Conte quanto realmente restou. Esse será o novo saldo; informe 0 se acabou."}
+            </p>
             <div className="space-y-1.5">
-              <Label htmlFor="qtd-saida">Quantidade</Label>
+              <Label htmlFor="qtd-saida">
+                {tipoSaida === "ajuste" && saidaItem?.modo_controle === "rendimento_usos"
+                  ? "Embalagens completas que restaram"
+                  : `${tipoSaida === "ajuste" ? "Quantidade que restou" : "Quantidade que saiu"} (${saidaItem?.modo_controle === "rendimento_usos" ? "embalagens" : saidaItem?.unidade})`}
+              </Label>
               <Input
                 id="qtd-saida"
                 inputMode="decimal"
                 value={qtd}
+                placeholder={tipoSaida === "ajuste" ? "Ex.: 4" : "Ex.: 1"}
                 onChange={(e) => setQtd(e.target.value)}
               />
             </div>
+            {contagemParcialPorUsos ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="usos-parciais">
+                  Usos restantes na embalagem em andamento (0 a {(saidaItem?.usos_por_unidade ?? 1) - 1})
+                </Label>
+                <Input
+                  id="usos-parciais"
+                  inputMode="decimal"
+                  value={usosParciais}
+                  onChange={(e) => setUsosParciais(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Ex.: 4 embalagens e 3 usos de um pote que rende 10 equivalem a 43 usos.
+                </p>
+              </div>
+            ) : null}
             <div className="space-y-1.5">
               <Label htmlFor="motivo-saida">Motivo</Label>
               <Input
@@ -865,11 +985,22 @@ function EstoquePage() {
                 value={motivo}
                 onChange={(e) => setMotivo(e.target.value)}
                 placeholder={
-                  tipoSaida === "saida" ? "Ex.: produto vencido" : "Ex.: contagem do mês"
+                  tipoSaida === "saida" ? "Ex.: perda de produto" : "Ex.: contagem do mês"
                 }
               />
             </div>
           </div>
+          {quantidadeValida && saidaItem ? (
+            <p role="status" className="rounded-xl bg-muted p-3 text-sm">
+              {tipoSaida === "ajuste"
+                ? saidaItem.modo_controle === "rendimento_usos"
+                  ? `Prévia: o saldo passará de ${quantidadeFormatada(saidaItem.usos_disponiveis ?? 0)} para ${quantidadeFormatada(saldoPrevisto * (saidaItem.usos_por_unidade ?? 1))} usos.`
+                  : `Prévia: o saldo passará de ${quantidadeFormatada(saidaItem.quantidade_atual)} para ${quantidadeFormatada(saldoPrevisto)} ${saidaItem.unidade}.`
+                : saldoPrevisto < 0
+                  ? "Essa saída é maior que o saldo disponível. Confira a quantidade em estoque antes de registrar."
+                  : `Prévia: ${quantidadeFormatada(saidaItem.quantidade_atual)} − ${quantidadeFormatada(quantidadeInformada)} = ${quantidadeFormatada(saldoPrevisto)} ${saidaItem.modo_controle === "rendimento_usos" ? "embalagens" : saidaItem.unidade} em estoque.`}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -878,8 +1009,21 @@ function EstoquePage() {
             >
               Cancelar
             </Button>
-            <Button onClick={confirmarSaida} disabled={movimentacao.isPending}>
-              Registrar
+            <Button
+              onClick={confirmarSaida}
+              disabled={
+                movimentacao.isPending ||
+                !quantidadeValida ||
+                (tipoSaida === "saida" && saldoPrevisto < 0)
+              }
+            >
+              {tipoSaida === "ajuste" && quantidadeValida
+                ? saidaItem?.modo_controle === "rendimento_usos"
+                  ? `Atualizar para ${quantidadeFormatada(quantidadeInformada * (saidaItem.usos_por_unidade ?? 1))} usos`
+                  : `Atualizar para ${quantidadeFormatada(quantidadeInformada)} ${saidaItem?.unidade ?? ""}`
+                : tipoSaida === "ajuste"
+                  ? "Atualizar quantidade"
+                  : "Registrar saída"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -919,7 +1063,11 @@ function EstoquePage() {
         </DialogContent>
       </Dialog>
 
-      <BarcodeScannerDialog open={bipando} onOpenChange={setBipando} onDetectado={aoDetectarCodigo} />
+      <BarcodeScannerDialog
+        open={bipando}
+        onOpenChange={setBipando}
+        onDetectado={aoDetectarCodigo}
+      />
 
       <EstoqueInsuficienteDialog
         faltantes={faltantes}
@@ -997,7 +1145,6 @@ function EstoquePage() {
           setItemAberto(o);
           if (!o) {
             setFormItem((f) => ({ ...f, codigoBarras: null }));
-            setModoTocado(false);
           }
         }}
       >
@@ -1012,7 +1159,8 @@ function EstoquePage() {
             {formItem.codigoBarras ? (
               <div className="flex items-center gap-2 rounded-xl border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
                 <ScanBarcode className="size-4 shrink-0" />
-                Código bipado: <span className="font-medium text-foreground">{formItem.codigoBarras}</span>
+                Código bipado:{" "}
+                <span className="font-medium text-foreground">{formItem.codigoBarras}</span>
               </div>
             ) : null}
             <div className="space-y-1.5">
@@ -1021,10 +1169,7 @@ function EstoquePage() {
                 id="nome-produto"
                 value={formItem.nome}
                 onChange={(e) => {
-                  const nome = e.target.value;
-                  setFormItem((f) =>
-                    modoTocado ? { ...f, nome } : { ...f, nome, ...sugerirModoControle(nome) },
-                  );
+                  setFormItem((f) => ({ ...f, nome: e.target.value }));
                 }}
                 placeholder="Ex.: cola para extensão de cílios"
               />
@@ -1051,10 +1196,11 @@ function EstoquePage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Unidade de medida</Label>
+                <Label>{formItem.modoControle === "rendimento_usos" ? "Controle físico" : "Unidade de medida"}</Label>
                 <Select
                   value={formItem.unidade}
                   onValueChange={(v) => setFormItem({ ...formItem, unidade: v as UnidadeEstoque })}
+                  disabled={formItem.modoControle === "rendimento_usos"}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -1069,7 +1215,9 @@ function EstoquePage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="qtd-inicial">Saldo inicial</Label>
+                <Label htmlFor="qtd-inicial">
+                  {formItem.modoControle === "rendimento_usos" ? "Embalagens em estoque" : "Saldo inicial"}
+                </Label>
                 <Input
                   id="qtd-inicial"
                   inputMode="decimal"
@@ -1077,22 +1225,26 @@ function EstoquePage() {
                   onChange={(e) => setFormItem({ ...formItem, quantidade: e.target.value })}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="minimo">Estoque mínimo</Label>
-                <Input
-                  id="minimo"
-                  inputMode="decimal"
-                  value={formItem.minimo}
-                  onChange={(e) => setFormItem({ ...formItem, minimo: e.target.value })}
-                />
-              </div>
+              {formItem.modoControle !== "rendimento_usos" ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="minimo">Estoque mínimo</Label>
+                  <Input
+                    id="minimo"
+                    inputMode="decimal"
+                    value={formItem.minimo}
+                    onChange={(e) => setFormItem({ ...formItem, minimo: e.target.value })}
+                  />
+                </div>
+              ) : null}
               <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="custo-produto">Custo unitário (R$)</Label>
                 <Input
                   id="custo-produto"
                   inputMode="decimal"
                   value={formItem.custo}
-                  onChange={(e) => setFormItem({ ...formItem, custo: formatMoedaInput(e.target.value) })}
+                  onChange={(e) =>
+                    setFormItem({ ...formItem, custo: formatMoedaInput(e.target.value) })
+                  }
                   placeholder="0,00"
                 />
               </div>
@@ -1102,8 +1254,12 @@ function EstoquePage() {
               <Select
                 value={formItem.modoControle}
                 onValueChange={(v) => {
-                  setModoTocado(true);
-                  setFormItem({ ...formItem, modoControle: v as ModoControleEstoque });
+                  const modoControle = v as ModoControleEstoque;
+                  setFormItem({
+                    ...formItem,
+                    modoControle,
+                    unidade: modoControle === "rendimento_usos" ? "un" : formItem.unidade,
+                  });
                 }}
               >
                 <SelectTrigger>
@@ -1119,33 +1275,31 @@ function EstoquePage() {
               </Select>
               <p className="text-xs text-muted-foreground">
                 {MODOS_CONTROLE.find((m) => m.valor === formItem.modoControle)?.hint}
-                {!modoTocado && formItem.modoControle !== "quantidade"
-                  ? " (sugestão pelo nome — pode trocar)"
-                  : ""}
               </p>
             </div>
-            {formItem.modoControle === "validade_dias" ? (
+            {formItem.modoControle === "rendimento_usos" ? (
               <div className="space-y-1.5">
-                <Label htmlFor="duracao-dias">Dura quantos dias depois de aberto</Label>
+                <Label htmlFor="usos-por-unidade">Quantos usos rende cada embalagem</Label>
                 <Input
-                  id="duracao-dias"
-                  inputMode="numeric"
-                  value={formItem.duracaoDias}
-                  onChange={(e) => setFormItem({ ...formItem, duracaoDias: e.target.value })}
-                  placeholder="Ex.: 30"
+                  id="usos-por-unidade"
+                  inputMode="decimal"
+                  value={formItem.usosPorUnidade}
+                  onChange={(e) => setFormItem({ ...formItem, usosPorUnidade: e.target.value })}
+                  placeholder="Ex.: 10"
                 />
               </div>
             ) : null}
-            {formItem.modoControle === "validade_atendimentos" ? (
+            {formItem.modoControle === "rendimento_usos" ? (
               <div className="space-y-1.5">
-                <Label htmlFor="duracao-atendimentos">Rende quantos atendimentos depois de aberto</Label>
+                <Label htmlFor="usos-minimos">Avisar quando restarem (usos)</Label>
                 <Input
-                  id="duracao-atendimentos"
-                  inputMode="numeric"
-                  value={formItem.duracaoAtendimentos}
-                  onChange={(e) => setFormItem({ ...formItem, duracaoAtendimentos: e.target.value })}
+                  id="usos-minimos"
+                  inputMode="decimal"
+                  value={formItem.usosMinimos}
+                  onChange={(e) => setFormItem({ ...formItem, usosMinimos: e.target.value })}
                   placeholder="Ex.: 10"
                 />
+                <p className="text-xs text-muted-foreground">A capacidade começa a contar no cadastro.</p>
               </div>
             ) : null}
           </div>
@@ -1190,14 +1344,16 @@ function EstoquePage() {
                 id="preco-kit"
                 inputMode="decimal"
                 value={formKit.precoVenda}
-                onChange={(e) => setFormKit({ ...formKit, precoVenda: formatMoedaInput(e.target.value) })}
+                onChange={(e) =>
+                  setFormKit({ ...formKit, precoVenda: formatMoedaInput(e.target.value) })
+                }
                 placeholder="0,00"
               />
             </div>
             <div className="space-y-2">
               <Label>Produtos do kit</Label>
               <div className="max-h-52 space-y-1.5 overflow-y-auto rounded-xl border border-border p-2">
-                {itens.map((p) => {
+                {itensParaKit.map((p) => {
                   const item = formKit.itens.find((i) => i.item_estoque_id === p.id);
                   return (
                     <div key={p.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5">
@@ -1230,6 +1386,11 @@ function EstoquePage() {
                   );
                 })}
               </div>
+              {itensParaKit.length !== itens.length ? (
+                <p className="text-xs text-muted-foreground">
+                  Produtos controlados por usos ficam disponíveis para atendimentos; kits terão esse suporte na próxima etapa.
+                </p>
+              ) : null}
               <p className="text-xs text-muted-foreground">
                 Custo dos insumos: <Money value={custoFormKit} /> • Lucro por kit:{" "}
                 <Money value={parseMoedaInput(formKit.precoVenda) - custoFormKit} colorir />

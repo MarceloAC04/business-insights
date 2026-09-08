@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from fastapi import HTTPException
+from postgrest.exceptions import APIError
 from supabase import Client
 
 from app.core.supabase_client import row, rows
@@ -17,6 +18,126 @@ from app.schemas.alertas import (
     DispositivoIn,
     DispositivoOut,
 )
+from app.services.estoque_rendimento import (
+    e_rendimento,
+    quantidade_consumo_disponivel,
+    unidade_consumo,
+)
+
+
+_CAMPOS_ITEM_ESTOQUE = (
+    "id, nome, unidade, quantidade_atual, quantidade_minima, modo_controle, "
+    "usos_por_unidade, usos_minimos"
+)
+
+
+def _registrar_alerta_vivo(supabase: Client, user_id: str, chave: str, dados: dict) -> None:
+    """Mantém uma única ocorrência aberta, preservando o histórico resolvido."""
+    tabela = supabase.table("alertas")
+    existentes = rows(
+        tabela.select("id")
+        .eq("user_id", user_id)
+        .eq("chave_dedupe", chave)
+        .is_("resolvido_em", "null")
+        .limit(1)
+        .execute().data
+    )
+    if existentes:
+        tabela.update(dados).eq("id", existentes[0]["id"]).eq("user_id", user_id).execute()
+        return
+    try:
+        tabela.insert(dados).execute()
+    except APIError as exc:
+        # O índice parcial único cobre duas consultas à central que ocorram ao
+        # mesmo tempo. A segunda apenas atualiza a ocorrência vencedora.
+        if getattr(exc, "code", None) != "23505":
+            raise
+        tabela.update(dados).eq("user_id", user_id).eq("chave_dedupe", chave).is_(
+            "resolvido_em", "null"
+        ).execute()
+
+
+def _sincronizar_alertas_estoque(supabase: Client, user_id: str) -> None:
+    """Calcula a central pelo saldo lógico sem depender de abrir Estoque.
+
+    Itens por rendimento usam usos; os demais usam sua quantidade cadastrada.
+    Uma única chave por item evita ruído quando a consulta é feita muitas vezes.
+    """
+    itens = rows(
+        supabase.table("estoque_itens")
+        .select(_CAMPOS_ITEM_ESTOQUE)
+        .eq("user_id", user_id)
+        .eq("ativo", True)
+        .execute().data
+    )
+    agora_iso = datetime.now(timezone.utc).isoformat()
+    for item in itens:
+        por_usos = e_rendimento(item)
+        saldo = (
+            quantidade_consumo_disponivel(item)
+            if por_usos
+            else float(item.get("quantidade_atual") or 0)
+        )
+        limite = float(item.get("usos_minimos") if por_usos else item.get("quantidade_minima") or 0)
+        unidade = unidade_consumo(item)
+        chave = f"estoque_condicao:{item['id']}"
+
+        if saldo < 0:
+            tipo, severidade = "estoque_negativo", "critico"
+            titulo = f"Estoque negativo: {item['nome']}"
+            mensagem = f"Há {abs(saldo):g} {unidade}(s) registrados sem saldo em {item['nome']}."
+        elif saldo == 0:
+            tipo, severidade = "estoque_critico", "critico"
+            titulo = f"Sem {unidade}(s) disponíveis: {item['nome']}"
+            mensagem = f"{item['nome']} não tem mais {unidade}(s) disponíveis."
+        elif saldo <= limite:
+            tipo, severidade = "estoque_baixo", "alerta"
+            titulo = f"Poucos {unidade}(s) disponíveis: {item['nome']}"
+            mensagem = f"Restam {saldo:g} {unidade}(s) de {item['nome']}; o aviso está em {limite:g}."
+        else:
+            tipo = None
+
+        if tipo is None:
+            (
+                supabase.table("alertas")
+                .update({"resolvido_em": agora_iso})
+                .eq("user_id", user_id)
+                .eq("referencia_tipo", "estoque_item")
+                .eq("referencia_id", item["id"])
+                .is_("resolvido_em", "null")
+                .execute()
+            )
+            continue
+
+        # Alertas específicos de uma finalização forçada e os criados pelas
+        # versões anteriores são substituídos pela condição atual do produto.
+        # Assim a central continua com um aviso, e não vários, para o mesmo item.
+        (
+            supabase.table("alertas")
+            .update({"resolvido_em": agora_iso})
+            .eq("user_id", user_id)
+            .eq("referencia_tipo", "estoque_item")
+            .eq("referencia_id", item["id"])
+            .neq("chave_dedupe", chave)
+            .is_("resolvido_em", "null")
+            .execute()
+        )
+        _registrar_alerta_vivo(
+            supabase,
+            user_id,
+            chave,
+            {
+                "user_id": user_id,
+                "tipo": tipo,
+                "severidade": severidade,
+                "titulo": titulo,
+                "mensagem": mensagem,
+                "referencia_tipo": "estoque_item",
+                "referencia_id": item["id"],
+                "chave_dedupe": chave,
+                "resolvido_em": None,
+            },
+        )
 
 
 def _converter_linha_alerta(linha: dict) -> AlertaOut:
@@ -40,6 +161,7 @@ def listar_alertas(
     tipo: str | None = None,
     severidade: str | None = None,
 ) -> AlertasListaOut:
+    _sincronizar_alertas_estoque(supabase, user_id)
     query = supabase.table("alertas").select("*").eq("user_id", user_id).is_("resolvido_em", "null")
 
     if apenas_nao_lidos is True:

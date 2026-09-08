@@ -1,60 +1,58 @@
 """Regras de `estoque` (endpoints-backend.md §5, A6)."""
 
-from datetime import datetime, timezone
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+from math import ceil
 
 from fastapi import HTTPException
+from postgrest.exceptions import APIError
 from supabase import Client
 
 from app.core.supabase_client import row, rows
 from app.schemas.estoque import ItemIn, ItemPatchIn, MovimentacaoIn
+from app.services.estoque_rendimento import (
+    custo_por_unidade_consumo,
+    e_rendimento,
+    quantidade_consumo_disponivel,
+    unidade_consumo,
+)
 
 _CAMPOS_ITEM = (
     "id, nome, unidade, categoria, quantidade_atual, quantidade_minima, custo_medio, "
     "custo_ultima_compra, status, deficit, ativo, codigo_barras, modo_controle, "
-    "duracao_dias, duracao_atendimentos, unidade_aberta_em, atendimentos_desde_abertura"
+    "usos_por_unidade, usos_minimos"
 )
-
-# Limiares do aviso de "acabando" por validade — mesmo espírito do
-# `quantidade_atual <= quantidade_minima` já usado pra saldo, só que aqui
-# não tem um "mínimo" configurável por item: um valor fixo e razoável pra
-# um salão pequeno perceber a tempo de repor.
-_DIAS_LIMIAR_ALERTA = 5
-_ATENDIMENTOS_LIMIAR_ALERTA = 3
 
 
 def _agora() -> datetime:
     return datetime.now(timezone.utc)
 
-
-def _enriquecer_validade(item: dict) -> dict:
+def _enriquecer_item(item: dict) -> dict:
     """
-    Adiciona `dias_restantes`/`atendimentos_restantes`/`status_validade` —
-    não dá pra ser coluna gerada no Postgres porque depende de `now()`
-    (não é uma expressão imutável). Fica de fora (`None`) para itens no
-    modo `quantidade`, que já tem seu próprio `status` calculado no banco.
+    Adiciona a capacidade e o custo por uso para potes/frascos. O saldo físico
+    continua no banco; o uso é a unidade que a profissional acompanha.
     """
-    modo = item.get("modo_controle") or "quantidade"
-    item["dias_restantes"] = None
-    item["atendimentos_restantes"] = None
-    item["status_validade"] = None
+    item["usos_disponiveis"] = None
+    item["custo_por_uso"] = None
+    item["deficit_usos"] = None
+    item["status_rendimento"] = None
 
-    aberta_em = item.get("unidade_aberta_em")
-    if modo == "validade_dias" and item.get("duracao_dias") and aberta_em:
-        aberta = datetime.fromisoformat(str(aberta_em).replace("Z", "+00:00"))
-        dias_passados = (_agora() - aberta).total_seconds() / 86400
-        restantes = int(item["duracao_dias"]) - int(dias_passados)
-        item["dias_restantes"] = restantes
-        item["status_validade"] = (
-            "critico" if restantes <= 0 else "alerta" if restantes <= _DIAS_LIMIAR_ALERTA else "ok"
+    if e_rendimento(item):
+        disponiveis = quantidade_consumo_disponivel(item)
+        minimo = float(item.get("usos_minimos") or 0)
+        item["usos_disponiveis"] = disponiveis
+        item["custo_por_uso"] = custo_por_unidade_consumo(item)
+        item["deficit_usos"] = max(0, minimo - disponiveis)
+        item["status_rendimento"] = (
+            "negativo"
+            if disponiveis < 0
+            else "critico"
+            if disponiveis <= 0
+            else "alerta"
+            if disponiveis <= minimo
+            else "ok"
         )
-    elif modo == "validade_atendimentos" and item.get("duracao_atendimentos"):
-        restantes = int(item["duracao_atendimentos"]) - int(item.get("atendimentos_desde_abertura") or 0)
-        item["atendimentos_restantes"] = restantes
-        item["status_validade"] = (
-            "critico"
-            if restantes <= 0
-            else "alerta" if restantes <= _ATENDIMENTOS_LIMIAR_ALERTA else "ok"
-        )
+        return item
     return item
 
 
@@ -119,46 +117,73 @@ def _buscar_item(supabase: Client, user_id: str, item_id: str) -> dict:
             status_code=404,
             detail={"codigo": "RECURSO_NAO_ENCONTRADO", "mensagem": "Item de estoque não encontrado"},
         )
-    return _enriquecer_validade(linhas[0])
+    return _enriquecer_item(linhas[0])
 
 
-def _gerar_alertas_validade(supabase: Client, user_id: str, itens: list[dict]) -> None:
+def _registrar_alerta_vivo(supabase: Client, user_id: str, chave: str, dados: dict) -> None:
+    """Atualiza o alerta vivo ou cria um novo sem depender de `upsert` parcial.
+
+    `001_v1_completo.sql` usa índice único parcial para permitir várias
+    ocorrências históricas da mesma chave depois que a anterior foi resolvida.
+    O PostgREST não aceita esse índice como alvo de `on_conflict`, portanto um
+    `upsert(..., on_conflict="user_id,chave_dedupe")` devolve 42P10 no banco
+    real. A leitura/atualização preserva o histórico e a captura de 23505 cobre
+    a corrida entre duas listagens simultâneas.
     """
-    Espelha em `alertas` o `status_validade` calculado em `_enriquecer_validade`
-    — sem isso, item com validade acabando só aparecia como badge na tela de
-    Estoque, sem chegar na central de alertas/badge global/WhatsApp que os
-    outros tipos de alerta já usam. `chave_dedupe` faz o upsert idempotente
-    (mesmo padrão de `atendimentos_service`'s `estoque_negativo`): roda a cada
-    listagem sem duplicar linha, e resolve o alerta sozinho quando o item volta
-    a ficar "ok" (troca de unidade, ajuste manual etc.).
-    """
+    tabela = supabase.table("alertas")
+    existentes = rows(
+        tabela.select("id")
+        .eq("user_id", user_id)
+        .eq("chave_dedupe", chave)
+        .is_("resolvido_em", "null")
+        .limit(1)
+        .execute()
+        .data
+    )
+    if existentes:
+        tabela.update(dados).eq("id", existentes[0]["id"]).eq("user_id", user_id).execute()
+        return
+
+    try:
+        tabela.insert(dados).execute()
+    except APIError as exc:
+        if getattr(exc, "code", None) != "23505":
+            raise
+        tabela.update(dados).eq("user_id", user_id).eq("chave_dedupe", chave).is_(
+            "resolvido_em", "null"
+        ).execute()
+
+
+def _gerar_alertas_rendimento(supabase: Client, user_id: str, itens: list[dict]) -> None:
+    """Espelha a reposição por usos na central de alertas, sem abrir pote."""
     agora_iso = _agora().isoformat()
     for item in itens:
-        modo = item.get("modo_controle") or "quantidade"
-        if modo == "quantidade":
+        if not e_rendimento(item):
             continue
-        chave = f"validade:{item['id']}"
-        status = item.get("status_validade")
-        if status in ("alerta", "critico"):
-            if status == "critico":
-                titulo = f"Validade vencida: {item['nome']}"
-                mensagem = (
-                    f"{item['nome']} passou da validade — provavelmente já ressecou/venceu."
-                    if modo == "validade_dias"
-                    else f"{item['nome']} já rendeu mais atendimentos do que devia — hora de abrir outra unidade."
-                )
-                tipo = "validade_vencida"
+        chave = f"estoque_rendimento:{item['id']}"
+        status = item.get("status_rendimento")
+        if status in ("alerta", "critico", "negativo"):
+            disponiveis = float(item.get("usos_disponiveis") or 0)
+            if status == "negativo":
+                titulo = f"Estoque negativo: {item['nome']}"
+                mensagem = f"{item['nome']} passou da capacidade disponível de usos."
+                tipo, severidade = "estoque_negativo", "alerta"
+            elif status == "critico":
+                titulo = f"Sem usos disponíveis: {item['nome']}"
+                mensagem = f"{item['nome']} não tem mais usos disponíveis para atendimentos."
+                tipo, severidade = "estoque_critico", "critico"
             else:
-                restante = item.get("dias_restantes") if modo == "validade_dias" else item.get("atendimentos_restantes")
-                unidade_txt = "dia(s)" if modo == "validade_dias" else "atendimento(s)"
-                titulo = f"Validade acabando: {item['nome']}"
-                mensagem = f"Faltam {restante} {unidade_txt} para {item['nome']} vencer."
-                tipo = "validade_proxima"
-            supabase.table("alertas").upsert(
+                titulo = f"Poucos usos disponíveis: {item['nome']}"
+                mensagem = f"Restam {disponiveis:g} uso(s) de {item['nome']}."
+                tipo, severidade = "estoque_baixo", "alerta"
+            _registrar_alerta_vivo(
+                supabase,
+                user_id,
+                chave,
                 {
                     "user_id": user_id,
                     "tipo": tipo,
-                    "severidade": status,
+                    "severidade": severidade,
                     "titulo": titulo,
                     "mensagem": mensagem,
                     "referencia_tipo": "estoque_item",
@@ -166,12 +191,134 @@ def _gerar_alertas_validade(supabase: Client, user_id: str, itens: list[dict]) -
                     "chave_dedupe": chave,
                     "resolvido_em": None,
                 },
-                on_conflict="user_id,chave_dedupe",
-            ).execute()
+            )
         else:
             supabase.table("alertas").update({"resolvido_em": agora_iso}).eq(
                 "user_id", user_id
             ).eq("chave_dedupe", chave).is_("resolvido_em", "null").execute()
+
+
+_JANELA_PLANEJAMENTO_DIAS = 30
+_COBERTURA_REPOSICAO_DIAS = 14
+
+
+def _quantidade_logica_movimentada(item: dict, movimentacao: dict) -> float:
+    """Converte o histórico para a unidade que a profissional acompanha."""
+    if not e_rendimento(item):
+        return float(movimentacao.get("quantidade") or 0)
+
+    if movimentacao.get("unidade_consumo") == "uso" and movimentacao.get("quantidade_consumida") is not None:
+        return float(movimentacao["quantidade_consumida"])
+    # Histórico anterior à migração 012 não trazia a quantidade lógica. Para
+    # ele, a fração física ainda pode ser convertida pelo rendimento atual;
+    # dados novos sempre seguem o primeiro ramo e preservam sua conversão.
+    return float(movimentacao.get("quantidade") or 0) * float(item.get("usos_por_unidade") or 1)
+
+
+def _montar_planejamento_reposicao(
+    itens: list[dict],
+    saidas_ultimos_30_dias: list[dict],
+    consumo_agendado_por_item: dict[str, float],
+    atendimentos_agendados: int,
+) -> list[dict]:
+    """Transforma saldo, histórico e agenda em uma sugestão que pode ser auditada.
+
+    A meta cobre o limite configurado, os materiais já reservados na agenda e
+    14 dias da média recente. Não altera configurações nem registra entrada ou
+    gasto: a profissional continua decidindo se, quando e onde comprar.
+    """
+    por_item = {str(item["id"]): item for item in itens}
+    consumo_historico: dict[str, float] = defaultdict(float)
+    for movimento in saidas_ultimos_30_dias:
+        item = por_item.get(str(movimento.get("item_id")))
+        if item:
+            consumo_historico[str(item["id"])] += _quantidade_logica_movimentada(item, movimento)
+
+    planejamento: list[dict] = []
+    for item in itens:
+        item_id = str(item["id"])
+        por_usos = e_rendimento(item)
+        unidade = unidade_consumo(item)
+        atual = float((item.get("usos_disponiveis") if por_usos else item.get("quantidade_atual")) or 0)
+        minimo = float((item.get("usos_minimos") if por_usos else item.get("quantidade_minima")) or 0)
+        medio_diario = consumo_historico[item_id] / _JANELA_PLANEJAMENTO_DIAS
+        agendado = float(consumo_agendado_por_item.get(item_id, 0))
+        meta = minimo + agendado + medio_diario * _COBERTURA_REPOSICAO_DIAS
+        sugerida = max(0, meta - atual)
+        if sugerida <= 0:
+            continue
+
+        base = (
+            f"Limite de {minimo:g} {unidade}(s) + agenda de {agendado:g} {unidade}(s)"
+            f" + {medio_diario:g} {unidade}(s)/dia pela média dos últimos "
+            f"{_JANELA_PLANEJAMENTO_DIAS} dias."
+        )
+        planejamento.append({
+            "item_id": item_id,
+            "nome": item["nome"],
+            "unidade_consumo": unidade,
+            "quantidade_atual": atual,
+            "quantidade_minima": minimo,
+            "consumo_medio_diario": medio_diario,
+            "consumo_agendado": agendado,
+            "atendimentos_agendados": atendimentos_agendados if agendado else 0,
+            "quantidade_sugerida": sugerida,
+            "embalagens_sugeridas": ceil(sugerida / float(item["usos_por_unidade"])) if por_usos else None,
+            "base_calculo": base,
+        })
+    return sorted(planejamento, key=lambda item: (-item["quantidade_sugerida"], item["nome"].lower()))
+
+
+def _planejar_reposicao(supabase: Client, user_id: str, itens: list[dict]) -> list[dict]:
+    if not itens:
+        return []
+
+    agora = _agora()
+    inicio_historico = (agora - timedelta(days=_JANELA_PLANEJAMENTO_DIAS)).isoformat()
+    fim_agenda = (agora + timedelta(days=_JANELA_PLANEJAMENTO_DIAS)).isoformat()
+    saidas = rows(
+        supabase.table("estoque_movimentacoes")
+        .select("item_id, quantidade, quantidade_consumida, unidade_consumo")
+        .eq("user_id", user_id)
+        .eq("tipo", "saida")
+        .gte("criado_em", inicio_historico)
+        .execute().data
+    )
+    agendamentos = rows(
+        supabase.table("atendimentos")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("status", "agendado")
+        .gte("data", agora.isoformat())
+        .lt("data", fim_agenda)
+        .execute().data
+    )
+    ids_agendamentos = [str(atendimento["id"]) for atendimento in agendamentos]
+    consumo_agendado: dict[str, float] = defaultdict(float)
+    if ids_agendamentos:
+        servicos_agendados = rows(
+            supabase.table("atendimento_servicos")
+            .select("servico_id")
+            .in_("atendimento_id", ids_agendamentos)
+            .execute().data
+        )
+        quantidade_por_servico = Counter(
+            str(linha["servico_id"]) for linha in servicos_agendados if linha.get("servico_id")
+        )
+        if quantidade_por_servico:
+            composicoes = rows(
+                supabase.table("servico_produtos_padrao")
+                .select("servico_id, item_estoque_id, quantidade")
+                .in_("servico_id", list(quantidade_por_servico))
+                .execute().data
+            )
+            for composicao in composicoes:
+                repeticoes = quantidade_por_servico.get(str(composicao["servico_id"]), 0)
+                consumo_agendado[str(composicao["item_estoque_id"])] += (
+                    float(composicao["quantidade"]) * repeticoes
+                )
+
+    return _montar_planejamento_reposicao(itens, saidas, consumo_agendado, len(ids_agendamentos))
 
 
 def listar(
@@ -193,17 +340,21 @@ def listar(
         query = query.eq("ativo", ativo)
     else:
         query = query.eq("ativo", True)
-    itens = [_enriquecer_validade(i) for i in rows(query.order("nome").execute().data)]
+    itens = [_enriquecer_item(i) for i in rows(query.order("nome").execute().data)]
 
     total_alertas = sum(
         1
         for i in itens
         if i["status"] in ("alerta", "critico", "negativo")
-        or i["status_validade"] in ("alerta", "critico")
+        or i["status_rendimento"] in ("alerta", "critico", "negativo")
     )
     valor_total = sum(float(i["quantidade_atual"]) * float(i["custo_medio"]) for i in itens if float(i["quantidade_atual"]) > 0)
-    _gerar_alertas_validade(supabase, user_id, itens)
-    return {"total_alertas": total_alertas, "valor_total": valor_total, "itens": itens}
+    return {
+        "total_alertas": total_alertas,
+        "valor_total": valor_total,
+        "itens": itens,
+        "planejamento_reposicao": _planejar_reposicao(supabase, user_id, itens),
+    }
 
 
 def criar(supabase: Client, user_id: str, body: ItemIn) -> dict:
@@ -221,13 +372,9 @@ def criar(supabase: Client, user_id: str, body: ItemIn) -> dict:
         "codigo_barras": body.codigo_barras,
         "ativo": True,
         "modo_controle": body.modo_controle,
-        "duracao_dias": body.duracao_dias,
-        "duracao_atendimentos": body.duracao_atendimentos,
+        "usos_por_unidade": body.usos_por_unidade,
+        "usos_minimos": body.usos_minimos if body.usos_minimos is not None else 0,
     }
-    if body.modo_controle != "quantidade":
-        # Cadastrar já é "abrir a primeira unidade": começa a contar
-        # dias/atendimentos a partir de agora.
-        campos["unidade_aberta_em"] = _agora().isoformat()
     resp = supabase.table("estoque_itens").insert(campos).execute()
     criado = row(resp.data)
     return _buscar_item(supabase, user_id, str(criado["id"]))
@@ -247,43 +394,37 @@ def editar(supabase: Client, user_id: str, item_id: str, body: ItemPatchIn) -> d
     if body.codigo_barras is not None:
         _validar_codigo_barras_livre(supabase, user_id, body.codigo_barras, ignorar_item_id=item_id)
         campos["codigo_barras"] = body.codigo_barras
+    modo_destino = body.modo_controle or item_atual.get("modo_controle") or "quantidade"
+    unidade_destino = body.unidade or item_atual.get("unidade")
+    usos_destino = (
+        body.usos_por_unidade
+        if "usos_por_unidade" in body.model_fields_set
+        else item_atual.get("usos_por_unidade")
+    )
+    if modo_destino == "rendimento_usos":
+        if unidade_destino != "un" or not usos_destino or float(usos_destino) <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "codigo": "VALIDACAO_INVALIDA",
+                    "mensagem": "Rendimento por usos precisa de unidade 'un' e usos por embalagem maior que zero.",
+                },
+            )
+        campos["usos_por_unidade"] = usos_destino
+        if "usos_minimos" in body.model_fields_set:
+            campos["usos_minimos"] = body.usos_minimos or 0
+    elif "usos_por_unidade" in body.model_fields_set:
+        campos["usos_por_unidade"] = body.usos_por_unidade
+    if "usos_minimos" in body.model_fields_set and modo_destino != "rendimento_usos":
+        campos["usos_minimos"] = body.usos_minimos or 0
+
     if body.modo_controle is not None:
         campos["modo_controle"] = body.modo_controle
-        campos["duracao_dias"] = body.duracao_dias
-        campos["duracao_atendimentos"] = body.duracao_atendimentos
-        if body.modo_controle != "quantidade" and item_atual.get("modo_controle") != body.modo_controle:
-            # Trocou para um modo por validade agora: reinicia a contagem
-            # a partir de hoje, do mesmo jeito que uma entrada nova faz.
-            campos["unidade_aberta_em"] = _agora().isoformat()
-            campos["atendimentos_desde_abertura"] = 0
+        if body.modo_controle == "quantidade":
+            campos["usos_por_unidade"] = None
+            campos["usos_minimos"] = 0
     if campos:
         supabase.table("estoque_itens").update(campos).eq("id", item_id).eq("user_id", user_id).execute()
-    return _buscar_item(supabase, user_id, item_id)
-
-
-def abrir_unidade(supabase: Client, user_id: str, item_id: str) -> dict:
-    """
-    Marca "abri uma unidade nova" sem passar por movimentação de entrada —
-    caso citado pelo dono do projeto (06/09/2026): a Thamires pode abrir um
-    pote/frasco que já tinha em estoque (não é compra nova), e hoje só a
-    entrada reiniciava a contagem de dias/atendimentos (`criar_movimentacao`).
-    Só faz sentido para item em modo de validade — em "quantidade" não existe
-    "unidade aberta" para reiniciar.
-    """
-    item = _buscar_item(supabase, user_id, item_id)
-    modo = item.get("modo_controle") or "quantidade"
-    if modo == "quantidade":
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "codigo": "VALIDACAO_INVALIDA",
-                "mensagem": "Esse item não tem controle por validade — não há unidade para abrir.",
-            },
-        )
-    supabase.table("estoque_itens").update({
-        "unidade_aberta_em": _agora().isoformat(),
-        "atendimentos_desde_abertura": 0,
-    }).eq("id", item_id).eq("user_id", user_id).execute()
     return _buscar_item(supabase, user_id, item_id)
 
 
@@ -304,6 +445,22 @@ def excluir(supabase: Client, user_id: str, item_id: str) -> None:
 
 def criar_movimentacao(supabase: Client, user_id: str, item_id: str, body: MovimentacaoIn) -> dict:
     item = _buscar_item(supabase, user_id, item_id)
+
+    if body.tipo == "ajuste":
+        # Contagem é saldo absoluto, não delta. O RPC trava a linha e grava
+        # saldo + histórico juntos, inclusive zero (migração 011).
+        resp = supabase.rpc("conferir_estoque", {
+            "p_item_id": item_id,
+            "p_quantidade": body.quantidade,
+            "p_motivo": body.motivo,
+            "p_user_id": user_id,
+        }).execute()
+        if not rows(resp.data):
+            raise HTTPException(status_code=404, detail={
+                "codigo": "RECURSO_NAO_ENCONTRADO",
+                "mensagem": "Item de estoque não encontrado",
+            })
+        return _buscar_item(supabase, user_id, item_id)
 
     qtd_atual = float(item["quantidade_atual"])
     custo_medio = float(item["custo_medio"])
@@ -385,18 +542,6 @@ def criar_movimentacao(supabase: Client, user_id: str, item_id: str, body: Movim
         campos_item["custo_medio"] = novo_custo_medio
         campos_item["custo_ultima_compra"] = novo_custo_ultima_compra
 
-    modo = item.get("modo_controle") or "quantidade"
-    if body.tipo == "entrada" and modo != "quantidade":
-        # Comprar de novo = abrir uma unidade nova: reinicia a contagem de
-        # dias/atendimentos, mesmo raciocínio de A6 (a compra é o gatilho).
-        campos_item["unidade_aberta_em"] = _agora().isoformat()
-        campos_item["atendimentos_desde_abertura"] = 0
-    elif body.tipo == "saida" and modo == "validade_atendimentos":
-        # Saída manual também conta como "usei num atendimento" — mesma
-        # contagem que a finalização de atendimento incrementa direto pelo
-        # RPC (`atendimentos_service.finalizar`).
-        campos_item["atendimentos_desde_abertura"] = int(item.get("atendimentos_desde_abertura") or 0) + 1
-
     if campos_item:
         supabase.table("estoque_itens").update(campos_item).eq("id", item_id).eq("user_id", user_id).execute()
 
@@ -412,7 +557,8 @@ def listar_movimentacoes(
     tipo: str | None,
 ) -> dict:
     query = supabase.table("estoque_movimentacoes").select(
-        "id, item_id, tipo, quantidade, motivo, atendimento_id, criado_em"
+        "id, item_id, tipo, quantidade, motivo, atendimento_id, criado_em, saldo_anterior, saldo_atual, "
+        "quantidade_consumida, unidade_consumo"
     ).eq("user_id", user_id)
     if item_id:
         query = query.eq("item_id", item_id)
@@ -441,6 +587,10 @@ def listar_movimentacoes(
                 "motivo": m["motivo"],
                 "atendimento_id": m.get("atendimento_id"),
                 "criado_em": m["criado_em"],
+                "saldo_anterior": m.get("saldo_anterior"),
+                "saldo_atual": m.get("saldo_atual"),
+                "quantidade_consumida": m.get("quantidade_consumida"),
+                "unidade_consumo": m.get("unidade_consumo"),
             }
             for m in linhas
         ]

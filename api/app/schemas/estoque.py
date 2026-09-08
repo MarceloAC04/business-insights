@@ -1,6 +1,6 @@
 """Schemas de `estoque` (endpoints-backend.md §5)."""
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 UNIDADES = {"un", "ml", "g", "cx"}
 CATEGORIAS = {
@@ -13,14 +13,14 @@ CATEGORIAS = {
     "outro",
 }
 TIPOS_MOVIMENTACAO = {"entrada", "saida", "ajuste"}
-# Além de saldo em unidades (padrão), um item pode ser controlado pelo tempo
-# desde que a unidade em uso foi aberta (`validade_dias`) ou pela quantidade
-# de atendimentos que ela já rendeu (`validade_atendimentos`) — pedido do
-# dono do projeto (06/09/2026, 008_estoque_validade_e_catalogo.sql).
-MODOS_CONTROLE = {"quantidade", "validade_dias", "validade_atendimentos"}
+# `rendimento_usos` é o modelo para potes/frascos: o saldo continua sendo de
+# embalagens físicas, e cada baixa de serviço informa quantos usos consumiu.
+MODOS_CONTROLE = {"quantidade", "rendimento_usos"}
 
 
 class ItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     nome: str
     unidade: str
     categoria: str
@@ -29,8 +29,8 @@ class ItemIn(BaseModel):
     custo_unitario: float = 0
     codigo_barras: str | None = None
     modo_controle: str = "quantidade"
-    duracao_dias: int | None = None
-    duracao_atendimentos: int | None = None
+    usos_por_unidade: float | None = Field(default=None, allow_inf_nan=False)
+    usos_minimos: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _validar(self):
@@ -42,19 +42,25 @@ class ItemIn(BaseModel):
             raise ValueError("quantidade_minima não pode ser negativa")
         if self.codigo_barras is not None:
             self.codigo_barras = self.codigo_barras.strip() or None
-        _validar_modo_controle(self.modo_controle, self.duracao_dias, self.duracao_atendimentos)
+        _validar_modo_controle(
+            self.modo_controle,
+            self.unidade,
+            self.usos_por_unidade,
+        )
         return self
 
 
 class ItemPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     nome: str | None = None
     unidade: str | None = None
     categoria: str | None = None
     quantidade_minima: float | None = None
     codigo_barras: str | None = None
     modo_controle: str | None = None
-    duracao_dias: int | None = None
-    duracao_atendimentos: int | None = None
+    usos_por_unidade: float | None = Field(default=None, allow_inf_nan=False)
+    usos_minimos: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _validar(self):
@@ -67,32 +73,41 @@ class ItemPatchIn(BaseModel):
         if self.codigo_barras is not None:
             self.codigo_barras = self.codigo_barras.strip() or None
         if self.modo_controle is not None:
-            _validar_modo_controle(self.modo_controle, self.duracao_dias, self.duracao_atendimentos)
+            _validar_modo_controle(
+                self.modo_controle,
+                self.unidade,
+                self.usos_por_unidade,
+            )
         return self
 
 
-def _validar_modo_controle(modo: str, duracao_dias: int | None, duracao_atendimentos: int | None) -> None:
+def _validar_modo_controle(
+    modo: str,
+    unidade: str | None,
+    usos_por_unidade: float | None,
+) -> None:
     if modo not in MODOS_CONTROLE:
         raise ValueError(f"modo_controle deve ser um de {MODOS_CONTROLE}")
-    if modo == "validade_dias" and not duracao_dias:
-        raise ValueError("duracao_dias é obrigatório quando modo_controle é validade_dias")
-    if modo == "validade_atendimentos" and not duracao_atendimentos:
-        raise ValueError(
-            "duracao_atendimentos é obrigatório quando modo_controle é validade_atendimentos"
-        )
+    if modo == "rendimento_usos":
+        if unidade is not None and unidade != "un":
+            raise ValueError("rendimento_usos usa unidade 'un' para potes, frascos ou embalagens")
+        if usos_por_unidade is None or usos_por_unidade <= 0:
+            raise ValueError("usos_por_unidade deve ser maior que zero em rendimento_usos")
 
 
 class MovimentacaoIn(BaseModel):
     tipo: str
-    quantidade: float
+    quantidade: float = Field(allow_inf_nan=False)
     motivo: str = ""
-    custo_unitario: float | None = None
+    custo_unitario: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _validar(self):
         if self.tipo not in TIPOS_MOVIMENTACAO:
             raise ValueError(f"tipo deve ser um de {TIPOS_MOVIMENTACAO}")
-        if self.quantidade <= 0:
+        if self.tipo == "ajuste" and self.quantidade < 0:
+            raise ValueError("A quantidade contada não pode ser negativa")
+        if self.tipo != "ajuste" and self.quantidade <= 0:
             raise ValueError("quantidade deve ser maior que zero")
         return self
 
@@ -111,21 +126,37 @@ class ItemOut(BaseModel):
     ativo: bool
     codigo_barras: str | None = None
     modo_controle: str = "quantidade"
-    duracao_dias: int | None = None
-    duracao_atendimentos: int | None = None
-    unidade_aberta_em: str | None = None
-    atendimentos_desde_abertura: int = 0
-    # Calculados no backend (não dá pra gerar no Postgres — depende de
-    # `now()`). Ausentes (`None`) quando modo_controle é "quantidade".
-    dias_restantes: int | None = None
-    atendimentos_restantes: int | None = None
-    status_validade: str | None = None
+    usos_por_unidade: float | None = None
+    usos_minimos: float | None = None
+    # Derivados de `quantidade_atual × usos_por_unidade`; são a capacidade
+    # que a tela mostra e que serviços consomem no modo rendimento.
+    usos_disponiveis: float | None = None
+    custo_por_uso: float | None = None
+    deficit_usos: float | None = None
+    status_rendimento: str | None = None
+
+
+class PlanejamentoReposicaoOut(BaseModel):
+    """Sugestão explicável, sempre somente de leitura, para a próxima compra."""
+
+    item_id: str
+    nome: str
+    unidade_consumo: str
+    quantidade_atual: float
+    quantidade_minima: float
+    consumo_medio_diario: float
+    consumo_agendado: float
+    atendimentos_agendados: int
+    quantidade_sugerida: float
+    embalagens_sugeridas: int | None = None
+    base_calculo: str
 
 
 class EstoquePaginaOut(BaseModel):
     total_alertas: int
     valor_total: float
     itens: list[ItemOut]
+    planejamento_reposicao: list[PlanejamentoReposicaoOut] = []
 
 
 class MovimentacaoOut(BaseModel):
@@ -137,6 +168,12 @@ class MovimentacaoOut(BaseModel):
     motivo: str
     atendimento_id: str | None
     criado_em: str
+    saldo_anterior: float | None = None
+    saldo_atual: float | None = None
+    # No modo rendimento, `quantidade` continua sendo a fração física do
+    # pote; estes campos preservam no histórico o que a usuária informou.
+    quantidade_consumida: float | None = None
+    unidade_consumo: str | None = None
 
 
 class MovimentacoesListaOut(BaseModel):

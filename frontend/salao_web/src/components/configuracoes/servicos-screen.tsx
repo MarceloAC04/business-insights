@@ -62,7 +62,7 @@ export function ServicosScreen() {
   const custoInsumos = (produtos: FormServico["produtos"]) =>
     produtos.reduce((total, produto) => {
       const item = itens.find((atual) => atual.id === produto.item_estoque_id);
-      return total + (item ? item.custo_medio * produto.quantidade : 0);
+      return total + (item ? (item.custo_por_uso ?? item.custo_medio) * produto.quantidade : 0);
     }, 0);
 
   const abrirNovoServico = () => {
@@ -170,7 +170,10 @@ export function ServicosScreen() {
                         <p className="mt-0.5 text-xs text-muted-foreground">
                           {servico.produtos_padrao.length
                             ? servico.produtos_padrao
-                                .map((produto) => `${produto.quantidade}${produto.unidade} ${produto.nome}`)
+                                .map(
+                                  (produto) =>
+                                    `${produto.quantidade} ${produto.unidade_consumo} ${produto.nome}`,
+                                )
                                 .join(", ")
                             : "sem insumos padrão"}
                         </p>
@@ -269,21 +272,26 @@ export function ServicosScreen() {
                       {item ? (
                         <Input
                           className="h-9 w-16"
-                          inputMode="numeric"
+                          inputMode="decimal"
                           value={String(item.quantidade)}
                           onChange={(evento) =>
                             setForm({
                               ...form,
                               produtos: form.produtos.map((produto) =>
                                 produto.item_estoque_id === itemEstoque.id
-                                  ? { ...produto, quantidade: Number(evento.target.value) || 1 }
+                                  ? {
+                                      ...produto,
+                                      quantidade: Number(evento.target.value.replace(",", ".")) || 1,
+                                    }
                                   : produto,
                               ),
                             })
                           }
                         />
                       ) : (
-                        <span className="text-xs text-muted-foreground">{itemEstoque.unidade}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {itemEstoque.modo_controle === "rendimento_usos" ? "usos" : itemEstoque.unidade}
+                        </span>
                       )}
                     </div>
                   );

@@ -279,13 +279,24 @@ gera um alerta `estoque_negativo` por item afetado.
 `confirmar_estoque_insuficiente: true` libera **só a checagem de saldo**. Status inválido,
 material inexistente e corpo malformado continuam recusando.
 
+#### Consistência da operação — etapa 4
+
+A finalização é uma única transação no banco: ela trava o atendimento e os itens
+envolvidos, grava insumos, movimentações, custos e alertas, e só então altera o
+status para `finalizado`. Dois envios simultâneos do mesmo atendimento resultam em
+uma única baixa; o outro recebe `409` + `ATENDIMENTO_STATUS_INVALIDO`. Qualquer
+falha em uma das gravações desfaz todas as demais, inclusive os saldos já calculados.
+
 Erros: `409` + `ESTOQUE_INSUFICIENTE` (1ª passada) · `409` +
 `ATENDIMENTO_STATUS_INVALIDO` · `404` + `RECURSO_NAO_ENCONTRADO`.
 
 ### `PATCH /atendimentos/{id}/cancelar` — `NOVO`
 
 Se já estava finalizado, **estorna** as movimentações de estoque. `result` com o
-atendimento atualizado.
+atendimento atualizado. O estorno acontece na mesma transação que muda o status:
+devolve cada saída original uma única vez, registra o histórico de estorno e resolve
+o alerta negativo criado por aquela finalização. Um segundo cancelamento recebe
+`409` + `ATENDIMENTO_STATUS_INVALIDO` e não devolve material outra vez.
 
 ### `DELETE /atendimentos/{id}` — `NOVO`
 
@@ -425,14 +436,20 @@ path no servidor.
 
 Módulo dividido de `kits` porque juntos passariam de 8 operações.
 
-**Nada disso existe hoje** — nem tabela no `schema.sql`, nem endpoint. É a maior lacuna
-do backend: o estoque só vive no mock do Flutter.
+As seis operações abaixo estão implementadas no FastAPI; o frontend React fala somente
+com elas, pela base URL única do app.
 
 Tabelas a criar: `estoque_itens`, `estoque_movimentacoes`, `kits`, `kit_itens`.
 
 ### `GET /estoque/itens` — `NOVO`
 
 Query: `status` (`ok`/`alerta`/`critico`/`negativo`), `categoria`, `ativo`, `codigo_barras`.
+
+Além de `itens`, a resposta inclui `planejamento_reposicao`: uma lista somente de
+leitura para os próximos 30 dias. Para cada item que precisa ser comprado, o servidor
+informa o saldo na unidade natural (`un` ou `uso`), a média de saídas dos últimos 30
+dias, o consumo dos atendimentos agendados e a quantidade sugerida. A sugestão nunca
+altera rendimento, mínimo, estoque ou Gastos; ela apenas explica a base da decisão.
 
 ```json
 {
@@ -453,13 +470,12 @@ Query: `status` (`ok`/`alerta`/`critico`/`negativo`), `categoria`, `ativo`, `cod
       "ativo": true,
       "codigo_barras": null,
       "modo_controle": "quantidade",
-      "duracao_dias": null,
-      "duracao_atendimentos": null,
-      "unidade_aberta_em": null,
-      "atendimentos_desde_abertura": 0,
-      "dias_restantes": null,
-      "atendimentos_restantes": null,
-      "status_validade": null
+      "usos_por_unidade": null,
+      "usos_minimos": 0,
+      "usos_disponiveis": null,
+      "custo_por_uso": null,
+      "deficit_usos": null,
+      "status_rendimento": null
     }
   ]
 }
@@ -478,46 +494,66 @@ zero ao repor.
 `categoria` ∈ `cilios` · `sobrancelha` · `limpeza_pele` · `micropigmentacao` ·
 `reconstrucao` · `descartavel` · `outro`.
 
-#### Validade por tempo ou por atendimentos — `DECIDIDO` (06/09/2026)
+#### Rendimento por usos — `DECIDIDO` (07/09/2026, etapa 2 do estoque)
 
-Além do saldo em unidades (o padrão, `modo_controle: "quantidade"`), um item pode ser
-controlado por quanto dura a unidade **aberta** — ex.: "1 pote de creme dura 30 dias" ou
-"1 pote de creme rende 10 atendimentos" depois de aberto:
+Um produto compartilhado pode ser acompanhado por sua **capacidade total de
+usos**, sem perguntar quando um pote foi aberto. Exemplo: 6 potes que rendem 10
+usos cada mostram 60 usos; um serviço que usa 1 uso passa a mostrar 59.
 
-- `modo_controle` ∈ `quantidade` · `validade_dias` · `validade_atendimentos`.
-- `duracao_dias` (obrigatório só em `validade_dias`) e `duracao_atendimentos`
-  (obrigatório só em `validade_atendimentos`) são a duração-alvo da unidade aberta.
-- `unidade_aberta_em` é o instante em que a unidade atual foi considerada aberta —
-  reabre (zera `atendimentos_desde_abertura` e reseta `unidade_aberta_em` para agora) a
-  cada `entrada` de movimentação, tratada como "abriu um pote novo".
-- `atendimentos_desde_abertura` incrementa em 1 por atendimento/uso que consome o item
-  (não por quantidade) quando `modo_controle = validade_atendimentos`.
-- `dias_restantes`, `atendimentos_restantes` e `status_validade` (`ok`/`alerta`/
-  `critico`, mesma régua de `status`) são **calculados a partir de `now()`**, por isso
-  não são coluna gerada do Postgres como `status`/`deficit` — o servidor calcula na
-  leitura (`GET /estoque/itens`, `POST`/`PATCH` de item) e devolve prontos, do mesmo
-  jeito que `status` já é: o cliente não recalcula.
-- Limiar de alerta: `alerta` quando restam ≤ 5 dias ou ≤ 3 atendimentos; `critico`
-  quando chegou a zero ou passou.
-- **Gera alerta** (implementado em 06/09/2026, sugestão de automação #1): toda chamada de
-  `GET /estoque/itens` espelha o `status_validade` calculado em uma linha de `alertas`
-  (`tipo` = `validade_proxima`/`validade_vencida`, `referencia_tipo` = `estoque_item`,
-  `chave_dedupe` = `validade:{item_id}` — upsert idempotente, resolve sozinho quando o
-  item volta a `ok`). Migração `010_alertas_tipo_validade.sql` estende o check
-  constraint de `alertas.tipo`. Chega na central de alertas/badge junto dos outros
-  tipos — falta só o canal WhatsApp/push desses dois tipos, que é `futuro` como para os
-  demais (ver A3 em `CLAUDE.md`).
-- Consumo por **kit** (`kits.montar`, implementado em 06/09/2026): agora incrementa
-  `atendimentos_desde_abertura` (pela quantidade de kits montados) para item em
-  `modo_controle = validade_atendimentos` na composição — mesmo raciocínio de
-  `atendimentos.finalizar`. Antes só o consumo de material em `atendimentos.finalizar` e
-  a saída manual em `estoque/movimentacoes` incrementavam.
-- `POST /estoque/itens/{id}/abrir` — `NOVO` (implementado em 06/09/2026, sugestão de
-  automação #3): marca "abri uma unidade nova" sem lançar `entrada` — caso em que ela
-  abre um pote/frasco que já tinha em estoque (não foi compra nova). Reseta
-  `unidade_aberta_em = now()` e `atendimentos_desde_abertura = 0`; `422` +
-  `VALIDACAO_INVALIDA` se o item estiver em `modo_controle = "quantidade"` (não existe
-  "unidade aberta" para reiniciar nesse modo). Sem corpo de requisição.
+- `modo_controle = "rendimento_usos"` exige `unidade = "un"`,
+  `usos_por_unidade > 0` e `usos_minimos >= 0`.
+- `quantidade_atual` continua sendo a quantidade de embalagens. Para esse modo,
+  pode ficar fracionária internamente: 59 usos de potes que rendem 10 = 5,9
+  unidades. A API devolve `usos_disponiveis`, `custo_por_uso`,
+  `deficit_usos` e `status_rendimento` já calculados; a tela não refaz contas.
+- `servico_produtos_padrao[].quantidade` e
+  `atendimentos/{id}/finalizar.materiais[].quantidade` significam **usos**
+  para esse modo. Nos demais modos, continuam na unidade física do item.
+- Cada uso baixa `1 ÷ usos_por_unidade` da quantidade física e usa
+  `custo_medio ÷ usos_por_unidade` no custo do atendimento. Compra acrescenta
+  embalagens e recalcula a média ponderada como antes; não reinicia consumo.
+- O alerta usa `usos_minimos`, com os mesmos estados `ok`/`alerta`/`critico`/
+  `negativo`. Falta de estoque devolve usos em `result.faltantes` e respeita
+  as duas passadas da A5.
+
+Exemplo de criação:
+
+```json
+{
+  "nome": "Creme facial",
+  "unidade": "un",
+  "categoria": "limpeza_pele",
+  "quantidade_atual": 6,
+  "quantidade_minima": 0,
+  "custo_unitario": 50.00,
+  "modo_controle": "rendimento_usos",
+  "usos_por_unidade": 10,
+  "usos_minimos": 10
+}
+```
+
+Resposta resumida:
+
+```json
+{
+  "quantidade_atual": 6,
+  "usos_por_unidade": 10,
+  "usos_disponiveis": 60,
+  "custo_por_uso": 5.00,
+  "usos_minimos": 10,
+  "status_rendimento": "ok"
+}
+```
+
+#### Encerramento dos controles de duração — `DECIDIDO` (07/09/2026, etapa 3)
+
+Só existem dois modos: `quantidade` e `rendimento_usos`. O sistema não usa uma data de
+abertura, não trata estimativa como validade e não oferece ação de abrir pote. A migração
+`013_encerrar_controles_legados.sql`, aplicada depois da 012, converte o que restou em
+`validade_*` para `quantidade` sem mudar saldo, custo, composição de kit ou histórico.
+Itens em ml/g/caixa e itens de kit ficam em saldo físico até uma conferência informar um
+rendimento confiável. Os alertas de validade ainda existentes são resolvidos e preservados
+somente como histórico.
 
 #### Bipagem de código de barras — `DECIDIDO`
 
@@ -540,10 +576,10 @@ operações do módulo.
 Soft delete (`ativo = false`) quando o item já tem movimentação — apagar quebraria o
 histórico de custo dos atendimentos.
 
-`POST`/`PATCH` aceitam `modo_controle`, `duracao_dias`, `duracao_atendimentos` (ver
-"Validade por tempo ou por atendimentos" acima). `modo_controle` omitido vale
-`"quantidade"`. Cadastrar (ou trocar via `PATCH`) para um modo de validade abre a
-unidade agora (`unidade_aberta_em = now()`, `atendimentos_desde_abertura = 0`).
+`POST`/`PATCH` aceitam `modo_controle`, `usos_por_unidade` e `usos_minimos`.
+`modo_controle` omitido vale `"quantidade"`. Em `rendimento_usos`, a unidade física é
+obrigatoriamente `un` e o saldo começa no próprio cadastro; não há abertura de pote.
+Campos ou modos legados de duração retornam `422`.
 
 ### `POST /estoque/itens/{id}/movimentacoes` — `NOVO`
 
@@ -554,6 +590,39 @@ unidade agora (`unidade_aberta_em = now()`, `atendimentos_desde_abertura = 0`).
 
 `tipo` ∈ `entrada` · `saida` · `ajuste`. Devolve o item com a quantidade e o custo já
 atualizados.
+
+**Semântica das movimentações manuais (etapa 1 do roadmap, 07/09/2026):**
+
+- `entrada`: acrescenta `quantidade` ao saldo; deve ser finita e maior que zero.
+- `saida`: subtrai `quantidade`; deve ser finita e maior que zero. Saldo
+  insuficiente retorna `409 ESTOQUE_INSUFICIENTE`, sem gravar.
+- `ajuste`: conferência física. `quantidade` é o **saldo final contado**, finito
+  e maior ou igual a zero, nunca um incremento. Saldo 6 + contagem 4 resulta
+  em 4; contagem 0 resulta em 0. Não altera custo.
+- `custo_unitario`, quando informado, deve ser finito e não negativo.
+- A conferência grava saldo e histórico na mesma transação, com o dono derivado
+  da sessão. A migração `011_conferencia_estoque.sql` deve preceder o backend.
+  Ela não modifica o RPC incremental usado por atendimentos, kits e estornos.
+
+Para `rendimento_usos`, as movimentações manuais continuam recebendo embalagens na
+`quantidade` física. As baixas produzidas ao finalizar atendimento registram também
+`quantidade_consumida` e `unidade_consumo = "uso"`, preservando ao mesmo tempo a
+fração de embalagem e o consumo lógico no histórico.
+
+Na conferência de um item por rendimento, a tela pode somar embalagens completas e
+os usos restantes da embalagem em andamento. Ela converte essa contagem para a fração
+física em `quantidade` antes de chamar este endpoint: por exemplo, 4 embalagens e 3
+usos de um pote que rende 10 viram `4.3`. O servidor continua tendo um único saldo e
+uma única operação de conferência.
+
+```json
+{ "tipo": "ajuste", "quantidade": 0, "motivo": "Conferência de estoque" }
+```
+
+No histórico (`GET /estoque/movimentacoes`), novas conferências retornam também
+`saldo_anterior` e `saldo_atual` (ex.: `6` e `0`). `quantidade` guarda o saldo
+contado. Esses campos são nulos nos registros antigos e nas demais operações;
+não reinterpretar ajustes antigos ou estornos como contagens absolutas.
 
 #### Custo do item: média ponderada móvel — `DECIDIDO`
 
@@ -654,7 +723,9 @@ histórico de receita.
 Baixa `quantidade × quantidade_item` de **cada** item da composição, gerando uma
 `movimentacao` de `saida` por item com `kit_id` preenchido e motivo `Montagem de kit`, e
 soma `quantidade` em `quantidade_montada`. Operação **atômica**: ou baixa todos os itens,
-ou nenhum.
+ou nenhum. A composição, os saldos e o saldo montado do kit são travados na mesma
+transação, portanto uma falha não deixa insumo baixado sem kit montado.
+`quantidade` é um inteiro positivo: kits são montados e vendidos em unidades inteiras.
 
 Mesma mecânica de duas passadas da finalização (§2): sem saldo, `409` +
 `ESTOQUE_INSUFICIENTE` com `result.faltantes`; se ela confirmar, monta e deixa o saldo
@@ -888,12 +959,16 @@ Tipos de alerta na V1:
 | `saldo_negativo` | saldo do mês < 0 no fechamento parcial | `critico` |
 | `zero_a_zero` | saldo do mês < limite configurado | `alerta` |
 | `agendamento_publico_novo` | cliente marcou um atendimento pelo link (§10) | `info` |
-| `validade_proxima` | item por `validade_dias`/`validade_atendimentos` com `status_validade == alerta` (implementado 06/09/2026, ver §5) | `alerta` |
-| `validade_vencida` | item por `validade_dias`/`validade_atendimentos` com `status_validade == critico` (implementado 06/09/2026, ver §5) | `critico` |
 
 ### `GET /alertas` — `NOVO`
 
 Query: `apenas_nao_lidos` (bool), `tipo`, `severidade`.
+
+Antes de devolver a central, o servidor sincroniza os alertas ativos de cada item de
+estoque. A regra usa `quantidade_atual` para itens por quantidade e
+`usos_disponiveis` para rendimento; portanto uma reposição ou conferência resolve a
+condição mesmo que a tela de Estoque não tenha sido aberta. Há no máximo um alerta
+vivo por item e condição.
 
 ```json
 {

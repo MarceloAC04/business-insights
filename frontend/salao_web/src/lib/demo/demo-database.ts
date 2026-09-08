@@ -18,8 +18,10 @@ import type {
   GastosPagina,
   ItemEstoque,
   Kit,
+  ModoControleEstoque,
   Movimentacao,
   Perfil,
+  PlanejamentoReposicao,
   PontoHistorico,
   PreferenciasAlerta,
   ProdutoPadrao,
@@ -82,6 +84,9 @@ interface ItemRow {
   custo_ultima_compra: number;
   ativo: boolean;
   codigo_barras: string | null;
+  modo_controle: ModoControleEstoque;
+  usos_por_unidade: number | null;
+  usos_minimos: number;
 }
 
 interface ServicoRow {
@@ -260,6 +265,44 @@ export class DemoDatabase {
     return "ok";
   }
 
+  private static eRendimento(item: ItemRow): boolean {
+    return item.modo_controle === "rendimento_usos";
+  }
+
+  private static usosPorUnidade(item: ItemRow): number {
+    return item.usos_por_unidade && item.usos_por_unidade > 0 ? item.usos_por_unidade : 1;
+  }
+
+  private static quantidadeDisponivel(item: ItemRow): number {
+    return DemoDatabase.eRendimento(item)
+      ? item.quantidade_atual * DemoDatabase.usosPorUnidade(item)
+      : item.quantidade_atual;
+  }
+
+  private static quantidadeFisica(item: ItemRow, quantidadeConsumo: number): number {
+    return DemoDatabase.eRendimento(item)
+      ? quantidadeConsumo / DemoDatabase.usosPorUnidade(item)
+      : quantidadeConsumo;
+  }
+
+  private static custoPorUnidadeConsumo(item: ItemRow): number {
+    return DemoDatabase.eRendimento(item)
+      ? item.custo_medio / DemoDatabase.usosPorUnidade(item)
+      : item.custo_medio;
+  }
+
+  private static unidadeConsumo(item: ItemRow): string {
+    return DemoDatabase.eRendimento(item) ? "uso" : item.unidade;
+  }
+
+  private static statusRendimento(item: ItemRow): StatusEstoque | null {
+    if (!DemoDatabase.eRendimento(item)) return null;
+    return DemoDatabase.statusDoItem(
+      DemoDatabase.quantidadeDisponivel(item),
+      item.usos_minimos,
+    );
+  }
+
   private itemToApi(row: ItemRow): ItemEstoque {
     return {
       id: row.id,
@@ -274,15 +317,19 @@ export class DemoDatabase {
       deficit: Math.max(0, row.quantidade_minima - row.quantidade_atual),
       ativo: row.ativo,
       codigo_barras: row.codigo_barras,
-      // Modo demo não simula validade por tempo/atendimentos — só saldo (A5).
-      modo_controle: "quantidade",
-      duracao_dias: null,
-      duracao_atendimentos: null,
-      unidade_aberta_em: null,
-      atendimentos_desde_abertura: 0,
-      dias_restantes: null,
-      atendimentos_restantes: null,
-      status_validade: null,
+      modo_controle: row.modo_controle,
+      usos_por_unidade: row.usos_por_unidade,
+      usos_minimos: row.usos_minimos,
+      usos_disponiveis: DemoDatabase.eRendimento(row)
+        ? DemoDatabase.quantidadeDisponivel(row)
+        : null,
+      custo_por_uso: DemoDatabase.eRendimento(row)
+        ? DemoDatabase.custoPorUnidadeConsumo(row)
+        : null,
+      deficit_usos: DemoDatabase.eRendimento(row)
+        ? Math.max(0, row.usos_minimos - DemoDatabase.quantidadeDisponivel(row))
+        : null,
+      status_rendimento: DemoDatabase.statusRendimento(row),
     };
   }
 
@@ -292,6 +339,8 @@ export class DemoDatabase {
     quantidade: number,
     motivo: string,
     atendimentoId: string | null = null,
+    saldoAnterior: number | null = null,
+    consumo?: { quantidade: number; unidade: string },
   ): void {
     this.movimentacoes.unshift({
       id: this.novoId("mov"),
@@ -302,6 +351,10 @@ export class DemoDatabase {
       motivo,
       atendimento_id: atendimentoId,
       criado_em: agoraIso(),
+      saldo_anterior: saldoAnterior,
+      saldo_atual: saldoAnterior === null ? null : item.quantidade_atual,
+      quantidade_consumida: consumo?.quantidade ?? null,
+      unidade_consumo: consumo?.unidade ?? null,
     });
   }
 
@@ -315,14 +368,16 @@ export class DemoDatabase {
     const faltando: FaltanteEstoque[] = [];
     pedidos.forEach((quantidade, itemId) => {
       const item = this.itemPorId(itemId);
-      if (item.quantidade_atual >= quantidade) return;
+      const disponivel = DemoDatabase.quantidadeDisponivel(item);
+      if (disponivel >= quantidade) return;
       faltando.push({
         item_estoque_id: item.id,
         nome: item.nome,
         unidade: item.unidade,
+        unidade_consumo: DemoDatabase.unidadeConsumo(item),
         quantidade_solicitada: quantidade,
-        quantidade_disponivel: item.quantidade_atual,
-        deficit: quantidade - item.quantidade_atual,
+        quantidade_disponivel: disponivel,
+        deficit: quantidade - disponivel,
       });
     });
     return faltando;
@@ -395,7 +450,7 @@ export class DemoDatabase {
 
   private atendimentoToApi(row: AtendimentoRow): Atendimento {
     const totalServicos = row.servicos.reduce((soma, e) => soma + e.preco, 0);
-    const totalMateriais = row.materiais.reduce((soma, e) => soma + e.preco, 0);
+    const totalMateriais = row.materiais.reduce((soma, e) => soma + e.preco * e.quantidade, 0);
     return {
       id: row.id,
       cliente_nome: row.cliente_nome,
@@ -583,14 +638,19 @@ export class DemoDatabase {
         continue;
       }
       const item = this.itemPorId(itemId);
-      item.quantidade_atual -= quantidade;
-      this.movimentar(item, "saida", quantidade, "Atendimento", id);
+      const quantidadeFisica = DemoDatabase.quantidadeFisica(item, quantidade);
+      item.quantidade_atual -= quantidadeFisica;
+      this.movimentar(item, "saida", quantidadeFisica, "Atendimento", id, null, {
+        quantidade,
+        unidade: DemoDatabase.unidadeConsumo(item),
+      });
       gravados.push({
         item_estoque_id: item.id,
         nome: item.nome,
         quantidade,
-        // O custo do material é o custo médio de hoje (A6), congelado na linha.
-        preco: quantidade * item.custo_medio,
+        // É o custo por uso quando for pote/frasco; o total é preço × quantidade.
+        preco: DemoDatabase.custoPorUnidadeConsumo(item),
+        unidade_consumo: DemoDatabase.unidadeConsumo(item),
       });
     }
 
@@ -612,13 +672,19 @@ export class DemoDatabase {
       for (const material of atendimento.materiais) {
         if (!material.item_estoque_id) continue;
         const item = this.itemPorId(material.item_estoque_id);
-        item.quantidade_atual += material.quantidade;
+        const quantidadeFisica = DemoDatabase.quantidadeFisica(item, material.quantidade);
+        item.quantidade_atual += quantidadeFisica;
         this.movimentar(
           item,
           "entrada",
-          material.quantidade,
+          quantidadeFisica,
           "Estorno — atendimento cancelado",
           id,
+          null,
+          {
+            quantidade: material.quantidade,
+            unidade: material.unidade_consumo ?? DemoDatabase.unidadeConsumo(item),
+          },
         );
       }
       atendimento.materiais = [];
@@ -700,6 +766,73 @@ export class DemoDatabase {
 
   // ── estoque ────────────────────────────────────────────────────────────────
 
+  private planejamentoReposicao(itens: ItemEstoque[]): PlanejamentoReposicao[] {
+    const referencia = hoje();
+    const inicio = new Date(referencia);
+    inicio.setDate(inicio.getDate() - 30);
+    const fim = new Date(referencia);
+    fim.setDate(fim.getDate() + 30);
+    const consumoHistorico = new Map<string, number>();
+    const consumoAgendado = new Map<string, number>();
+
+    for (const movimento of this.movimentacoes) {
+      if (movimento.tipo !== "saida" || new Date(movimento.criado_em) < inicio) continue;
+      const item = itens.find((atual) => atual.id === movimento.item_id);
+      if (!item) continue;
+      const consumo =
+        item.modo_controle === "rendimento_usos"
+          ? movimento.unidade_consumo === "uso"
+            ? (movimento.quantidade_consumida ?? 0)
+            : movimento.quantidade * (item.usos_por_unidade ?? 1)
+          : movimento.quantidade;
+      consumoHistorico.set(item.id, (consumoHistorico.get(item.id) ?? 0) + consumo);
+    }
+
+    const agendados = this.atendimentos.filter(
+      (atendimento) =>
+        atendimento.status === "agendado" &&
+        new Date(atendimento.data) >= referencia &&
+        new Date(atendimento.data) < fim,
+    );
+    for (const atendimento of agendados) {
+      for (const servicoAtendimento of atendimento.servicos) {
+        const servico = this.servicos.find((atual) => atual.id === servicoAtendimento.servico_id);
+        for (const produto of servico?.produtos_padrao ?? []) {
+          consumoAgendado.set(
+            produto.item_estoque_id,
+            (consumoAgendado.get(produto.item_estoque_id) ?? 0) + produto.quantidade,
+          );
+        }
+      }
+    }
+
+    return itens
+      .flatMap((item) => {
+        const porUsos = item.modo_controle === "rendimento_usos";
+        const unidade = porUsos ? "uso" : item.unidade;
+        const atual = porUsos ? (item.usos_disponiveis ?? 0) : item.quantidade_atual;
+        const minimo = porUsos ? (item.usos_minimos ?? 0) : item.quantidade_minima;
+        const medioDiario = (consumoHistorico.get(item.id) ?? 0) / 30;
+        const agendado = consumoAgendado.get(item.id) ?? 0;
+        const sugerida = Math.max(0, minimo + agendado + medioDiario * 14 - atual);
+        if (sugerida <= 0) return [];
+        return [{
+          item_id: item.id,
+          nome: item.nome,
+          unidade_consumo: unidade,
+          quantidade_atual: atual,
+          quantidade_minima: minimo,
+          consumo_medio_diario: medioDiario,
+          consumo_agendado: agendado,
+          atendimentos_agendados: agendado > 0 ? agendados.length : 0,
+          quantidade_sugerida: sugerida,
+          embalagens_sugeridas: porUsos ? Math.ceil(sugerida / (item.usos_por_unidade ?? 1)) : null,
+          base_calculo: `Limite de ${minimo} ${unidade}(s) + agenda de ${agendado} ${unidade}(s) + ${medioDiario.toFixed(1)} ${unidade}(s)/dia pela média dos últimos 30 dias.`,
+        }];
+      })
+      .sort((a, b) => b.quantidade_sugerida - a.quantidade_sugerida || a.nome.localeCompare(b.nome, "pt-BR"));
+  }
+
   getItens(codigoBarras?: string): Envelope<EstoquePagina> {
     const itens = this.itens
       .filter((e) => e.ativo)
@@ -709,18 +842,17 @@ export class DemoDatabase {
 
     return this.envelope(
       {
-        total_alertas: itens.filter((e) => e.status !== "ok").length,
+        total_alertas: itens.filter((e) => (e.status_rendimento ?? e.status) !== "ok").length,
         valor_total: itens.reduce((soma, e) => soma + e.quantidade_atual * e.custo_medio, 0),
         itens,
+        planejamento_reposicao: this.planejamentoReposicao(itens),
       },
       itens.length,
     );
   }
 
   private validarCodigoBarrasLivre(codigo: string, ignorarItemId?: string): void {
-    const emUso = this.itens.some(
-      (e) => e.codigo_barras === codigo && e.id !== ignorarItemId,
-    );
+    const emUso = this.itens.some((e) => e.codigo_barras === codigo && e.id !== ignorarItemId);
     if (emUso) {
       this.erro(
         AppErrorCodes.barcodeAlreadyUsed,
@@ -746,7 +878,20 @@ export class DemoDatabase {
       custo_ultima_compra: custo,
       ativo: true,
       codigo_barras: codigoBarras,
+      modo_controle: (body["modo_controle"] as ModoControleEstoque) ?? "quantidade",
+      usos_por_unidade: body["usos_por_unidade"] == null ? null : numero(body, "usos_por_unidade"),
+      usos_minimos: numero(body, "usos_minimos"),
     };
+    if (
+      item.modo_controle === "rendimento_usos" &&
+      (item.unidade !== "un" || !(item.usos_por_unidade && item.usos_por_unidade > 0))
+    ) {
+      this.erro(
+        AppErrorCodes.invalidValidation,
+        422,
+        "Rendimento por usos precisa de unidade e usos por embalagem válidos.",
+      );
+    }
     this.itens.push(item);
     if (quantidade > 0) this.movimentar(item, "entrada", quantidade, "Cadastro do item");
     return this.vazio();
@@ -762,6 +907,20 @@ export class DemoDatabase {
       const codigoBarras = body["codigo_barras"] as string | null;
       if (codigoBarras) this.validarCodigoBarrasLivre(codigoBarras, id);
       item.codigo_barras = codigoBarras;
+    }
+    if ("modo_controle" in body) item.modo_controle = body["modo_controle"] as ModoControleEstoque;
+    if ("usos_por_unidade" in body)
+      item.usos_por_unidade = body["usos_por_unidade"] == null ? null : numero(body, "usos_por_unidade");
+    if ("usos_minimos" in body) item.usos_minimos = numero(body, "usos_minimos");
+    if (
+      item.modo_controle === "rendimento_usos" &&
+      (item.unidade !== "un" || !(item.usos_por_unidade && item.usos_por_unidade > 0))
+    ) {
+      this.erro(
+        AppErrorCodes.invalidValidation,
+        422,
+        "Rendimento por usos precisa de unidade e usos por embalagem válidos.",
+      );
     }
     // Saldo não se edita: ele é o acumulado das movimentações. Corrigir
     // contagem é lançar um `ajuste` — é por isso que existe histórico.
@@ -794,10 +953,23 @@ export class DemoDatabase {
    */
   createMovimentacao(itemId: string, body: Body): Envelope<null> {
     const item = this.itemPorId(itemId);
-    const tipo = (body["tipo"] as TipoMovimentacao) ?? "entrada";
-    const quantidade = numero(body, "quantidade");
-    const custoUnitario =
-      typeof body["custo_unitario"] === "number" ? (body["custo_unitario"] as number) : null;
+    const tipo = body["tipo"] as TipoMovimentacao;
+    const quantidade = Number(body["quantidade"]);
+    const custoUnitario = body["custo_unitario"] == null ? null : Number(body["custo_unitario"]);
+    if (
+      !["entrada", "saida", "ajuste"].includes(tipo) ||
+      body["quantidade"] == null ||
+      (typeof body["quantidade"] === "string" && body["quantidade"].trim() === "") ||
+      !Number.isFinite(quantidade) ||
+      (tipo === "ajuste" ? quantidade < 0 : quantidade <= 0) ||
+      (custoUnitario !== null && (!Number.isFinite(custoUnitario) || custoUnitario < 0))
+    ) {
+      this.erro(AppErrorCodes.invalidValidation, 422, "Informe quantidade e custo válidos.");
+    }
+    if (tipo === "saida") {
+      const faltando = this.faltantes(new Map([[itemId, quantidade]]));
+      if (faltando.length) this.estoqueInsuficiente(faltando);
+    }
     const saldo = item.quantidade_atual;
 
     if (tipo === "entrada") {
@@ -816,7 +988,14 @@ export class DemoDatabase {
       item.quantidade_atual = quantidade;
     }
 
-    this.movimentar(item, tipo, quantidade, texto(body, "motivo"));
+    this.movimentar(
+      item,
+      tipo,
+      quantidade,
+      texto(body, "motivo"),
+      null,
+      tipo === "ajuste" ? saldo : null,
+    );
     return this.vazio();
   }
 
@@ -1075,6 +1254,10 @@ export class DemoDatabase {
         nome: item.nome,
         quantidade: numero(linha, "quantidade"),
         unidade: item.unidade,
+        modo_controle: item.modo_controle,
+        usos_por_unidade: item.usos_por_unidade,
+        custo_por_unidade_consumo: DemoDatabase.custoPorUnidadeConsumo(item),
+        unidade_consumo: DemoDatabase.unidadeConsumo(item),
       };
     });
 
@@ -1306,7 +1489,9 @@ export class DemoDatabase {
     };
 
     for (const item of this.itens.filter((e) => e.ativo)) {
-      const status = DemoDatabase.statusDoItem(item.quantidade_atual, item.quantidade_minima);
+      const status =
+        DemoDatabase.statusRendimento(item) ??
+        DemoDatabase.statusDoItem(item.quantidade_atual, item.quantidade_minima);
       if (status === "ok") continue;
 
       const tipo: TipoAlerta =
@@ -1326,7 +1511,9 @@ export class DemoDatabase {
         tipo,
         severidade: status === "alerta" ? "alerta" : "critico",
         titulo,
-        mensagem: `Saldo ${item.quantidade_atual} ${item.unidade}, mínimo ${item.quantidade_minima} ${item.unidade}.`,
+        mensagem: DemoDatabase.eRendimento(item)
+          ? `Restam ${DemoDatabase.quantidadeDisponivel(item)} usos, mínimo ${item.usos_minimos}.`
+          : `Saldo ${item.quantidade_atual} ${item.unidade}, mínimo ${item.quantidade_minima} ${item.unidade}.`,
         referenciaTipo: "estoque_item",
         referenciaId: item.id,
       });
@@ -1484,6 +1671,9 @@ export class DemoDatabase {
         custo_ultima_compra: ultima,
         ativo: true,
         codigo_barras: null,
+        modo_controle: "quantidade",
+        usos_por_unidade: null,
+        usos_minimos: 0,
       };
       this.itens.push(row);
       return row;
@@ -1495,7 +1685,12 @@ export class DemoDatabase {
     fio.codigo_barras = "7891234567890";
     const removedor = item("Removedor de cola", "ml", "cilios", 120, 50, 0.35, 0.4);
     const micropore = item("Fita micropore", "cx", "descartavel", 2, 2, 6.5, 6.5);
-    const cola = item("Cola adesiva para cílios", "un", "cilios", 0, 2, 28, 30);
+    // Exemplo da regra nova: seis frascos com dez usos cada = 60 usos. A
+    // tela mostra capacidade e nunca pede para "abrir" um pote.
+    const cola = item("Cola adesiva para cílios", "un", "cilios", 6, 0, 28, 30);
+    cola.modo_controle = "rendimento_usos";
+    cola.usos_por_unidade = 10;
+    cola.usos_minimos = 10;
     const pinca = item("Pinça curva", "un", "sobrancelha", -1, 1, 35, 35);
 
     this.movimentar(fio, "entrada", 10, "Compra — fornecedor");
@@ -1507,6 +1702,10 @@ export class DemoDatabase {
       nome: row.nome,
       quantidade,
       unidade: row.unidade,
+      modo_controle: row.modo_controle,
+      usos_por_unidade: row.usos_por_unidade,
+      custo_por_unidade_consumo: DemoDatabase.custoPorUnidadeConsumo(row),
+      unidade_consumo: DemoDatabase.unidadeConsumo(row),
     });
 
     this.servicos.push(
@@ -1620,7 +1819,7 @@ export class DemoDatabase {
       [0, 2],
       [
         { item_estoque_id: fio.id, nome: fio.nome, quantidade: 1, preco: 42 },
-        { item_estoque_id: micropore.id, nome: micropore.nome, quantidade: 2, preco: 13 },
+        { item_estoque_id: micropore.id, nome: micropore.nome, quantidade: 2, preco: 6.5 },
         { item_estoque_id: null, nome: "Máscara de argila", quantidade: 1, preco: 9 },
       ],
     );

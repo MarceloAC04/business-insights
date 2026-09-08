@@ -5,6 +5,7 @@ from supabase import Client
 
 from app.core.supabase_client import rows, row
 from app.schemas.servicos import ProdutoPadraoIn, ServicoIn, ServicoPatchIn
+from app.services.estoque_rendimento import custo_por_unidade_consumo, unidade_consumo
 
 
 def _montar_produtos_padrao(supabase: Client, servico_ids: list[str]) -> dict[str, list[dict]]:
@@ -21,7 +22,10 @@ def _montar_produtos_padrao(supabase: Client, servico_ids: list[str]) -> dict[st
     ids_item = list({linha["item_estoque_id"] for linha in linhas})
     if ids_item:
         resp_itens = (
-            supabase.table("estoque_itens").select("id, nome, unidade").in_("id", ids_item).execute()
+            supabase.table("estoque_itens")
+            .select("id, nome, unidade, modo_controle, usos_por_unidade, custo_medio")
+            .in_("id", ids_item)
+            .execute()
         )
         itens = {i["id"]: i for i in rows(resp_itens.data)}
 
@@ -33,6 +37,10 @@ def _montar_produtos_padrao(supabase: Client, servico_ids: list[str]) -> dict[st
             "nome": item.get("nome", ""),
             "quantidade": linha["quantidade"],
             "unidade": item.get("unidade", "un"),
+            "modo_controle": item.get("modo_controle", "quantidade"),
+            "usos_por_unidade": item.get("usos_por_unidade"),
+            "custo_por_unidade_consumo": custo_por_unidade_consumo(item) if item else 0,
+            "unidade_consumo": unidade_consumo(item) if item else "unidade",
         })
     return por_servico
 

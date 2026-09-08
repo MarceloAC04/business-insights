@@ -15,7 +15,10 @@ import { Paths } from "./paths";
 export const AlertasApi = {
   listar(apenasNaoLidos?: boolean): Promise<AlertasPagina> {
     return AppApi.get<AlertasPagina>(Paths.alertas, {
-      apenas_nao_lidos: apenasNaoLidos,
+      // Ausente significa "todos" no contrato. Enviar `false` pede somente
+      // os já lidos ao backend, fazendo a aba padrão parecer vazia quando
+      // existem apenas alertas novos.
+      apenas_nao_lidos: apenasNaoLidos ? true : undefined,
     }).then((r) => r.result);
   },
 

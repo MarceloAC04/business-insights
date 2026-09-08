@@ -24,12 +24,14 @@ class KitPatchIn(BaseModel):
 
 
 class MontarKitIn(BaseModel):
-    quantidade: float = Field(gt=0)
+    # Kit é uma unidade de revenda inteira; aceitar 0,5 aqui entraria em
+    # conflito com `kits.quantidade_montada`, que é inteira no banco.
+    quantidade: int = Field(gt=0)
     confirmar_estoque_insuficiente: bool = False
 
 
 class VenderKitIn(BaseModel):
-    quantidade: float = Field(gt=0)
+    quantidade: int = Field(gt=0)
     forma_pagamento: FormaPagamento = "a_vista"
     preco_unitario: float | None = None
     data: datetime | None = None

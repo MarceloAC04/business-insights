@@ -1,12 +1,13 @@
 # Salon API — FastAPI
 
-Backend de cálculos e relatórios do app de gestão para salão de beleza.
+API do app de gestão para salão de beleza.
 
 ## Princípio central
 
-> **Este serviço é deliberadamente enxuto.**
-> CRUD puro (atendimento, gasto, perfil, serviço) fica no Supabase REST API — o Flutter chama diretamente.
-> O FastAPI entra apenas quando há lógica que o Supabase não resolve: agregações multi-tabela, cálculos de precificação e disparo de webhooks para o n8n.
+> **Todo frontend fala somente com esta API.**
+> O FastAPI aplica autenticação e regras de negócio para cadastros, atendimentos,
+> estoque, alertas e relatórios; só ele acessa o Supabase. O React não usa
+> PostgREST, RPC ou SDK do Supabase diretamente.
 
 ---
 

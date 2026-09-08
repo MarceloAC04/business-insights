@@ -9,7 +9,7 @@ frontend (frontend/salao_web/src/lib/api/atendimentos.ts).
 
 from datetime import datetime
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class ServicoEntradaIn(BaseModel):
@@ -29,7 +29,7 @@ class ServicoEntradaIn(BaseModel):
 class MaterialEntradaIn(BaseModel):
     item_estoque_id: str | None = None
     nome: str | None = None
-    quantidade: float
+    quantidade: float = Field(gt=0, allow_inf_nan=False)
     preco: float | None = None
 
     @model_validator(mode="after")
@@ -70,6 +70,7 @@ class AtendimentoMaterialOut(BaseModel):
     nome: str
     quantidade: float
     preco: float
+    unidade_consumo: str | None = None
 
 
 class AtendimentoOut(BaseModel):

@@ -33,12 +33,8 @@ export type CategoriaEstoque =
   | "reconstrucao"
   | "outro";
 
-/**
- * Além de saldo em unidades (`quantidade`, o padrão), um item pode ser
- * controlado por validade: quantos dias a unidade aberta dura
- * (`validade_dias`) ou quantos atendimentos ela rende (`validade_atendimentos`).
- */
-export type ModoControleEstoque = "quantidade" | "validade_dias" | "validade_atendimentos";
+/** Embalagens físicas por saldo ou por capacidade total de usos. */
+export type ModoControleEstoque = "quantidade" | "rendimento_usos";
 
 export type TipoMovimentacao = "entrada" | "saida" | "ajuste";
 
@@ -95,6 +91,8 @@ export interface AtendimentoMaterial {
   nome: string;
   quantidade: number;
   preco: number;
+  /** `uso` para pote/frasco por rendimento; nulo em registros antigos/avulsos. */
+  unidade_consumo?: string | null;
 }
 
 export interface Atendimento {
@@ -162,20 +160,36 @@ export interface ItemEstoque {
   /** Código bipado com a câmera — null até a primeira bipagem desse item. */
   codigo_barras: string | null;
   modo_controle: ModoControleEstoque;
-  duracao_dias: number | null;
-  duracao_atendimentos: number | null;
-  unidade_aberta_em: string | null;
-  atendimentos_desde_abertura: number;
-  /** Calculados pelo backend a partir de `now()` — só fazem sentido quando `modo_controle` não é "quantidade". */
-  dias_restantes: number | null;
-  atendimentos_restantes: number | null;
-  status_validade: StatusEstoque | null;
+  usos_por_unidade: number | null;
+  usos_minimos: number | null;
+  /** Campos calculados pelo backend para `rendimento_usos`. */
+  usos_disponiveis: number | null;
+  custo_por_uso: number | null;
+  deficit_usos: number | null;
+  status_rendimento: StatusEstoque | null;
 }
 
 export interface EstoquePagina {
   total_alertas: number;
   valor_total: number;
   itens: ItemEstoque[];
+  /** Lista somente de leitura: o servidor explica por que sugere cada compra. */
+  planejamento_reposicao: PlanejamentoReposicao[];
+}
+
+export interface PlanejamentoReposicao {
+  item_id: string;
+  nome: string;
+  unidade_consumo: string;
+  quantidade_atual: number;
+  quantidade_minima: number;
+  consumo_medio_diario: number;
+  consumo_agendado: number;
+  atendimentos_agendados: number;
+  quantidade_sugerida: number;
+  /** Para rendimento, converte a sugestão lógica em embalagens inteiras. */
+  embalagens_sugeridas: number | null;
+  base_calculo: string;
 }
 
 export interface Movimentacao {
@@ -187,6 +201,11 @@ export interface Movimentacao {
   motivo: string;
   atendimento_id: string | null;
   criado_em: string;
+  /** Preenchidos nas novas conferências; ausentes no histórico antigo. */
+  saldo_anterior?: number | null;
+  saldo_atual?: number | null;
+  quantidade_consumida?: number | null;
+  unidade_consumo?: string | null;
 }
 
 /** A lista que o `409 ESTOQUE_INSUFICIENTE` devolve em `result.faltantes` (A5). */
@@ -197,6 +216,7 @@ export interface FaltanteEstoque {
   quantidade_solicitada: number;
   quantidade_disponivel: number;
   deficit: number;
+  unidade_consumo?: string;
 }
 
 // ── kits ─────────────────────────────────────────────────────────────────────
@@ -230,6 +250,10 @@ export interface ProdutoPadrao {
   nome: string;
   quantidade: number;
   unidade: UnidadeEstoque;
+  modo_controle: ModoControleEstoque;
+  usos_por_unidade: number | null;
+  custo_por_unidade_consumo: number;
+  unidade_consumo: string;
 }
 
 export interface Servico {

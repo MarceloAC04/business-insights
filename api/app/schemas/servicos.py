@@ -1,11 +1,12 @@
 """Schemas de `servicos` (endpoints-backend.md §8)."""
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class ProdutoPadraoIn(BaseModel):
     item_estoque_id: str
-    quantidade: float
+    # Para `rendimento_usos`, esta é a quantidade de usos por atendimento.
+    quantidade: float = Field(allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _validar(self):
@@ -52,6 +53,10 @@ class ProdutoPadraoOut(BaseModel):
     nome: str
     quantidade: float
     unidade: str
+    modo_controle: str = "quantidade"
+    usos_por_unidade: float | None = None
+    custo_por_unidade_consumo: float | None = None
+    unidade_consumo: str = "unidade"
 
 
 class ServicoOut(BaseModel):

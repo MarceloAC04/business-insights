@@ -53,20 +53,6 @@ def editar_item(
     return sucesso(resultado)
 
 
-@router.post(
-    "/itens/{item_id}/abrir",
-    response_model=ResponseModel[ItemOut],
-    summary="Marca abertura de uma unidade nova (sem lançar entrada)",
-)
-def abrir_unidade(
-    item_id: str,
-    user_id: str = Depends(usuario_atual),
-    supabase: Client = Depends(get_supabase),
-):
-    resultado = service.abrir_unidade(supabase, user_id, item_id)
-    return sucesso(resultado)
-
-
 @router.delete("/itens/{item_id}", response_model=ResponseModel[None], summary="Exclui item (soft delete se já usado)")
 def excluir_item(
     item_id: str,

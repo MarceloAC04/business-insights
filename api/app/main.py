@@ -5,10 +5,10 @@ Responsabilidade desta camada:
   - Montar o app FastAPI com CORS, routers e metadata
   - Não conter nenhuma lógica de negócio
 
-Divisão de trabalho (ver CONTEXTO_IA.md):
-  - CRUD puro → Supabase REST API (Flutter chama diretamente)
-  - Cálculos e relatórios → FastAPI (este serviço)
-  - Automações e notificações → n8n (chama esta API via webhooks)
+Divisão de trabalho:
+  - React → FastAPI para toda operação autenticada
+  - FastAPI → Supabase para persistência, regras de negócio e relatórios
+  - Automações e notificações → n8n pelos webhooks desta API
 """
 
 from fastapi import FastAPI
@@ -37,9 +37,8 @@ cfg = get_settings()
 app = FastAPI(
     title="Salon API",
     description=(
-        "Backend de cálculos e relatórios do app de gestão de salão. "
-        "CRUD básico fica no Supabase — este serviço contém apenas "
-        "lógica que o Supabase não resolve sozinho."
+        "API operacional do app de gestão de salão: autenticação, cadastros, "
+        "atendimentos, estoque, alertas e relatórios."
     ),
     docs_url="/docs",
     redoc_url="/redoc",

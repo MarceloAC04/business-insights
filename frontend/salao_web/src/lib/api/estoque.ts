@@ -29,14 +29,15 @@ export interface ItemBody {
   codigo_barras?: string | null;
   /** Padrão "quantidade" quando omitido — controle por saldo, como sempre foi. */
   modo_controle?: ModoControleEstoque;
-  /** Obrigatório quando `modo_controle` é "validade_dias". */
-  duracao_dias?: number | null;
-  /** Obrigatório quando `modo_controle` é "validade_atendimentos". */
-  duracao_atendimentos?: number | null;
+  /** Obrigatório em `rendimento_usos`: quantos usos uma embalagem rende. */
+  usos_por_unidade?: number | null;
+  /** Em que capacidade de usos o alerta de reposição aparece. */
+  usos_minimos?: number | null;
 }
 
 export interface MovimentacaoBody {
   tipo: TipoMovimentacao;
+  /** Entrada/saída: quantidade positiva. Ajuste: saldo final contado, inclusive zero. */
   quantidade: number;
   motivo: string;
   /**
@@ -74,11 +75,6 @@ export const EstoqueApi = {
 
   criarMovimentacao(itemId: string, body: MovimentacaoBody): Promise<void> {
     return AppApi.post(Paths.movimentacoesDoItem(itemId), body).then(() => undefined);
-  },
-
-  /** "Abri agora" — reinicia dias/atendimentos sem lançar entrada (item já era dela, não foi compra nova). */
-  abrirUnidade(itemId: string): Promise<void> {
-    return AppApi.post(Paths.abrirUnidadeEstoque(itemId), {}).then(() => undefined);
   },
 
   listarMovimentacoes(params?: {

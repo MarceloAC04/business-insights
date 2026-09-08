@@ -66,7 +66,7 @@ export function EstoqueInsuficienteDialog({
             <li key={f.item_estoque_id} className="flex items-start justify-between gap-3">
               <span className="min-w-0 truncate font-medium text-warning">{f.nome}</span>
               <span className="shrink-0 text-xs text-warning">
-                precisa {f.quantidade_solicitada} {f.unidade} • tem {f.quantidade_disponivel}{" "}
+                precisa {f.quantidade_solicitada} {f.unidade_consumo ?? f.unidade} • tem {f.quantidade_disponivel}{" "}
                 (faltam {f.deficit})
               </span>
             </li>

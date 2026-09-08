@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from postgrest.exceptions import APIError
 
 from app.main import app
-from app.core.supabase_client import get_supabase
+from app.core.supabase_client import get_supabase_publico
 from app.services import agendamento_publico_service as service
 
 
@@ -139,7 +139,7 @@ class TestAgendamentoPublicoEndpoints:
             "salao": {"nome": "Thamires Beauty", "foto_url": None},
             "servicos": [{"id": TEST_SERVICO_ID, "nome": "Extensão", "preco": 180.0, "duracao_minutos": 90}],
         })
-        app.dependency_overrides[get_supabase] = lambda: mock_sb
+        app.dependency_overrides[get_supabase_publico] = lambda: mock_sb
         try:
             response = client.get(f"/v1/agendamento-publico/{TEST_SLUG}")
             assert response.status_code == 200
@@ -151,7 +151,7 @@ class TestAgendamentoPublicoEndpoints:
     def test_obter_pagina_endpoint_slug_invalido_retorna_404(self, client):
         mock_sb = MagicMock()
         _mock_rpc(mock_sb, erro=_api_error("SALAO_NAO_ENCONTRADO"))
-        app.dependency_overrides[get_supabase] = lambda: mock_sb
+        app.dependency_overrides[get_supabase_publico] = lambda: mock_sb
         try:
             response = client.get("/v1/agendamento-publico/slug-invalido")
             assert response.status_code == 404
@@ -167,7 +167,7 @@ class TestAgendamentoPublicoEndpoints:
             "status": "agendado",
             "servicos": [{"servico_id": TEST_SERVICO_ID, "nome": "Extensão", "preco": 180.0}],
         })
-        app.dependency_overrides[get_supabase] = lambda: mock_sb
+        app.dependency_overrides[get_supabase_publico] = lambda: mock_sb
         try:
             response = client.post(
                 f"/v1/agendamento-publico/{TEST_SLUG}/agendar",
@@ -187,7 +187,7 @@ class TestAgendamentoPublicoEndpoints:
     def test_agendar_endpoint_horario_indisponivel_retorna_409(self, client):
         mock_sb = MagicMock()
         _mock_rpc(mock_sb, erro=_api_error("HORARIO_INDISPONIVEL"))
-        app.dependency_overrides[get_supabase] = lambda: mock_sb
+        app.dependency_overrides[get_supabase_publico] = lambda: mock_sb
         try:
             response = client.post(
                 f"/v1/agendamento-publico/{TEST_SLUG}/agendar",

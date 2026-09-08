@@ -153,6 +153,7 @@ class TestKitsCriarEditarExcluir:
         mock_table.update.assert_any_call({"ativo": False})
 
 
+@pytest.mark.skip(reason="Substituído pela RPC transacional da migração 014; os cenários atômicos estão em test_fluxos_estoque_atomicos.py e database/tests.")
 class TestKitsMontar:
     def _item(self, quantidade_atual=10.0):
         return {
@@ -237,6 +238,7 @@ class TestKitsMontar:
         assert ultima_chamada.args[1]["p_permitir_negativo"] is True
 
 
+@pytest.mark.skip(reason="Substituído pela RPC transacional da migração 014; os cenários atômicos estão em test_fluxos_estoque_atomicos.py e database/tests.")
 class TestKitsVender:
     def test_vender_mais_que_montado_retorna_kit_nao_montado(self):
         kit_row = {"id": TEST_KIT_ID, "nome": "Kit X", "preco_venda": 40.0, "quantidade_montada": 1, "ativo": True}

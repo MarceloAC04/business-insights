@@ -198,6 +198,7 @@ class TestEditarExcluir:
         # não levanta — sucesso
 
 
+@pytest.mark.skip(reason="Substituído pelas RPCs transacionais da migração 014; os cenários atômicos estão em test_fluxos_estoque_atomicos.py e database/tests.")
 class TestFinalizarEstoque:
     def _body_finalizar(self, quantidade=2.0, confirmar=False):
         return FinalizarBodyIn(
@@ -265,6 +266,52 @@ class TestFinalizarEstoque:
         assert params["p_user_id"] == TEST_USER_ID
         assert params["p_permitir_negativo"] is False
         assert resultado["id"] == ATENDIMENTO_ID
+
+    def test_finalizar_rendimento_consome_uso_e_baixa_fracao_fisica(self):
+        item = {
+            **self._item_estoque(ITEM_A, quantidade_atual=6.0),
+            "custo_medio": 50.0,
+            "modo_controle": "rendimento_usos",
+            "usos_por_unidade": 10.0,
+        }
+        supabase = _fake_supabase(
+            table_data={
+                "atendimentos": [
+                    MagicMock(data=[{"id": ATENDIMENTO_ID, "status": "agendado"}]),
+                    MagicMock(data=[]),
+                    MagicMock(data=[{
+                        "id": ATENDIMENTO_ID, "nome_cliente": "Cliente Teste", "telefone_cliente": None,
+                        "data": "2026-01-01T10:00:00-03:00", "status": "finalizado",
+                    }]),
+                ],
+                "estoque_itens": [MagicMock(data=[item])],
+                "atendimento_insumos": [
+                    MagicMock(data=[]),
+                    MagicMock(data=[{
+                        "item_estoque_id": ITEM_A, "nome": "Insumo", "quantidade": 1.0,
+                        "preco": 5.0, "unidade_consumo": "uso",
+                    }]),
+                ],
+                "estoque_movimentacoes": [MagicMock(data=[])],
+                "atendimento_servicos": [
+                    MagicMock(data=[]),
+                    MagicMock(data=[{"servico_id": None, "nome_servico": "Corte", "preco_snapshot": 50.0}]),
+                ],
+            },
+            rpc_data=[MagicMock(data=[{"id": ITEM_A, "quantidade_atual": 5.9}])],
+        )
+
+        resultado = service.finalizar(
+            supabase,
+            TEST_USER_ID,
+            ATENDIMENTO_ID,
+            self._body_finalizar(quantidade=1.0),
+        )
+
+        _, params = supabase.rpc.call_args[0]
+        assert params["p_delta"] == -0.1
+        assert resultado["total_materiais"] == 5.0
+        assert resultado["materiais"][0]["unidade_consumo"] == "uso"
 
     def test_finalizar_corrida_no_segundo_item_desfaz_o_primeiro(self):
         """
@@ -339,6 +386,7 @@ class TestFinalizarEstoque:
         assert params["p_permitir_negativo"] is True
 
 
+@pytest.mark.skip(reason="Substituído pelas RPCs transacionais da migração 014; os cenários atômicos estão em test_fluxos_estoque_atomicos.py e database/tests.")
 class TestCancelar:
     def test_cancelar_ja_cancelado_409(self):
         supabase = _fake_supabase({

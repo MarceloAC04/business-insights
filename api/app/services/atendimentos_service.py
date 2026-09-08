@@ -5,6 +5,12 @@ from supabase import Client
 
 from app.core.supabase_client import rows, row
 from app.schemas.atendimentos import AtendimentoBodyIn, FinalizarBodyIn
+from app.services.estoque_rendimento import (
+    custo_por_unidade_consumo,
+    quantidade_consumo_disponivel,
+    quantidade_fisica_consumida,
+    unidade_consumo,
+)
 
 
 def _ajustar_estoque(supabase: Client, user_id: str, item_id: str, delta: float, permitir_negativo: bool) -> dict | None:
@@ -117,20 +123,20 @@ def _estimar_custo_insumos_agendados(supabase: Client, user_id: str, servicos: l
 
     resp_itens = (
         supabase.table("estoque_itens")
-        .select("id, custo_medio")
+        .select("id, custo_medio, modo_controle, usos_por_unidade")
         .eq("user_id", user_id)
         .in_("id", ids_item)
         .execute()
     )
-    custo_por_item = {item["id"]: item["custo_medio"] for item in rows(resp_itens.data)}
+    custo_por_item = {item["id"]: item for item in rows(resp_itens.data)}
 
     estimado = 0.0
     for servico in servicos:
         for produto in produtos_por_servico.get(servico["servico_id"], []):
-            custo_unitario = custo_por_item.get(produto["item_estoque_id"])
-            if custo_unitario is None:
+            item = custo_por_item.get(produto["item_estoque_id"])
+            if item is None:
                 return None
-            estimado += produto["quantidade"] * custo_unitario
+            estimado += produto["quantidade"] * custo_por_unidade_consumo(item)
     return estimado
 
 
@@ -144,7 +150,7 @@ def _montar_saida(supabase: Client, user_id: str, atendimento: dict) -> dict:
     )
     resp_mat = (
         supabase.table("atendimento_insumos")
-        .select("item_estoque_id, nome, quantidade, preco")
+        .select("item_estoque_id, nome, quantidade, preco, unidade_consumo")
         .eq("atendimento_id", aid)
         .execute()
     )
@@ -158,6 +164,7 @@ def _montar_saida(supabase: Client, user_id: str, atendimento: dict) -> dict:
             "nome": m["nome"],
             "quantidade": m["quantidade"],
             "preco": m["preco"],
+            "unidade_consumo": m.get("unidade_consumo"),
         }
         for m in rows(resp_mat.data)
     ]
@@ -278,7 +285,7 @@ def editar(supabase: Client, user_id: str, atendimento_id: str, body: Atendiment
     return obter(supabase, user_id, atendimento_id)
 
 
-def finalizar(
+def _finalizar_legado(
     supabase: Client, user_id: str, atendimento_id: str, body: FinalizarBodyIn
 ) -> dict:
     atendimento = _buscar_atendimento(supabase, user_id, atendimento_id)
@@ -297,7 +304,7 @@ def finalizar(
         resp = (
             supabase.table("estoque_itens")
             .select(
-                "id, nome, unidade, quantidade_atual, custo_medio, modo_controle, atendimentos_desde_abertura"
+                "id, nome, unidade, quantidade_atual, custo_medio, modo_controle, usos_por_unidade"
             )
             .eq("user_id", user_id)
             .in_("id", ids_estoque)
@@ -315,20 +322,27 @@ def finalizar(
                 },
             )
 
-    faltantes = []
+    # `quantidade` do request é a unidade que a profissional enxerga: usos
+    # para potes/frascos em rendimento, unidade/ml/g/cx para os demais. O
+    # banco continua recebendo a fração física da embalagem no RPC.
+    pedidos_consumo: dict[str, float] = {}
     for m in body.materiais:
-        if not m.item_estoque_id:
-            continue
-        item = itens_estoque[m.item_estoque_id]
-        disponivel = item["quantidade_atual"]
-        if disponivel < m.quantidade:
+        if m.item_estoque_id:
+            pedidos_consumo[m.item_estoque_id] = pedidos_consumo.get(m.item_estoque_id, 0) + m.quantidade
+
+    faltantes = []
+    for item_id, quantidade_consumo in pedidos_consumo.items():
+        item = itens_estoque[item_id]
+        disponivel = quantidade_consumo_disponivel(item)
+        if disponivel < quantidade_consumo:
             faltantes.append({
                 "item_estoque_id": item["id"],
                 "nome": item["nome"],
                 "unidade": item["unidade"],
-                "quantidade_solicitada": m.quantidade,
+                "unidade_consumo": unidade_consumo(item),
+                "quantidade_solicitada": quantidade_consumo,
                 "quantidade_disponivel": disponivel,
-                "deficit": m.quantidade - disponivel,
+                "deficit": quantidade_consumo - disponivel,
             })
 
     if faltantes and not body.confirmar_estoque_insuficiente:
@@ -343,12 +357,13 @@ def finalizar(
 
     itens_com_deficit = {f["item_estoque_id"] for f in faltantes}
 
-    # Soma por item — a mesma composição pode aparecer em mais de uma linha,
-    # e o RPC ajusta o saldo uma vez por item, não uma vez por linha.
-    pedidos: dict[str, float] = {}
-    for m in body.materiais:
-        if m.item_estoque_id:
-            pedidos[m.item_estoque_id] = pedidos.get(m.item_estoque_id, 0) + m.quantidade
+    # A mesma composição pode aparecer em mais de uma linha; soma antes de
+    # converter e ajusta o saldo uma vez por item. Assim 6 potes que rendem
+    # 10 usos ficam com 60 usos, e uma baixa de 1 vira -0,1 pote no banco.
+    pedidos_fisicos = {
+        item_id: quantidade_fisica_consumida(itens_estoque[item_id], quantidade_consumo)
+        for item_id, quantidade_consumo in pedidos_consumo.items()
+    }
 
     # Decremento atômico primeiro — se a corrida com outra finalização
     # simultânea fizer a trava disparar (saldo mudou entre a leitura acima e
@@ -357,8 +372,10 @@ def finalizar(
     # o atendimento gravado com baixa parcial (mesma lógica de
     # `AtendimentosApi.finalizar` no frontend).
     decrementados: list[tuple[str, float]] = []
-    for item_id, quantidade in pedidos.items():
-        resultado = _ajustar_estoque(supabase, user_id, item_id, -quantidade, body.confirmar_estoque_insuficiente)
+    for item_id, quantidade_fisica in pedidos_fisicos.items():
+        resultado = _ajustar_estoque(
+            supabase, user_id, item_id, -quantidade_fisica, body.confirmar_estoque_insuficiente
+        )
         if resultado is None:
             for d_item_id, d_quantidade in decrementados:
                 _ajustar_estoque(supabase, user_id, d_item_id, d_quantidade, True)
@@ -370,7 +387,9 @@ def finalizar(
                 .execute()
             )
             atual = row(resp_atual.data)
-            disponivel = atual.get("quantidade_atual", item["quantidade_atual"]) if atual else item["quantidade_atual"]
+            item_atualizado = {**item, "quantidade_atual": atual.get("quantidade_atual")} if atual else item
+            disponivel = quantidade_consumo_disponivel(item_atualizado)
+            solicitado = pedidos_consumo[item_id]
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -381,25 +400,15 @@ def finalizar(
                             "item_estoque_id": item["id"],
                             "nome": item["nome"],
                             "unidade": item["unidade"],
-                            "quantidade_solicitada": quantidade,
+                            "unidade_consumo": unidade_consumo(item),
+                            "quantidade_solicitada": solicitado,
                             "quantidade_disponivel": disponivel,
-                            "deficit": quantidade - disponivel,
+                            "deficit": solicitado - disponivel,
                         }]
                     },
                 },
             )
-        decrementados.append((item_id, quantidade))
-
-    # Item no modo "validade_atendimentos" (008_estoque_validade_e_catalogo.sql):
-    # cada atendimento consumido conta como um uso da unidade aberta, pra
-    # avisar quando ela estiver perto de acabar por atendimentos, não só por
-    # saldo. Uma vez por item por finalização, não uma vez por quantidade.
-    for item_id, _ in decrementados:
-        item = itens_estoque[item_id]
-        if item.get("modo_controle") == "validade_atendimentos":
-            supabase.table("estoque_itens").update({
-                "atendimentos_desde_abertura": int(item.get("atendimentos_desde_abertura") or 0) + 1,
-            }).eq("id", item_id).eq("user_id", user_id).execute()
+        decrementados.append((item_id, quantidade_fisica))
 
     linhas_insumo = []
     for m in body.materiais:
@@ -410,7 +419,8 @@ def finalizar(
                 "item_estoque_id": item["id"],
                 "nome": item["nome"],
                 "quantidade": m.quantidade,
-                "preco": item["custo_medio"],
+                "preco": custo_por_unidade_consumo(item),
+                "unidade_consumo": unidade_consumo(item),
             })
         else:
             linhas_insumo.append({
@@ -419,17 +429,20 @@ def finalizar(
                 "nome": m.nome,
                 "quantidade": m.quantidade,
                 "preco": m.preco,
+                "unidade_consumo": None,
             })
     if linhas_insumo:
         supabase.table("atendimento_insumos").insert(linhas_insumo).execute()
 
-    for item_id, quantidade in pedidos.items():
+    for item_id, quantidade_fisica in pedidos_fisicos.items():
         item = itens_estoque[item_id]
         supabase.table("estoque_movimentacoes").insert({
             "user_id": user_id,
             "item_id": item["id"],
             "tipo": "saida",
-            "quantidade": quantidade,
+            "quantidade": quantidade_fisica,
+            "quantidade_consumida": pedidos_consumo[item_id],
+            "unidade_consumo": unidade_consumo(item),
             "motivo": "Consumo em atendimento",
             "custo_unitario": item["custo_medio"],
             "atendimento_id": atendimento_id,
@@ -459,10 +472,17 @@ def finalizar(
             continue
         ids_padrao = [p["item_estoque_id"] for p in padrao]
         resp_custos = (
-            supabase.table("estoque_itens").select("id, custo_medio").in_("id", ids_padrao).execute()
+            supabase.table("estoque_itens")
+            .select("id, custo_medio, modo_controle, usos_por_unidade")
+            .in_("id", ids_padrao)
+            .execute()
         )
-        custos = {i["id"]: i["custo_medio"] for i in rows(resp_custos.data)}
-        custo_total = sum(p["quantidade"] * custos.get(p["item_estoque_id"], 0) for p in padrao)
+        custos = {i["id"]: i for i in rows(resp_custos.data)}
+        custo_total = sum(
+            p["quantidade"] * custo_por_unidade_consumo(custos[p["item_estoque_id"]])
+            for p in padrao
+            if p["item_estoque_id"] in custos
+        )
         supabase.table("atendimento_servicos").update({
             "custo_insumos_snapshot": custo_total,
         }).eq("id", s["id"]).execute()
@@ -488,7 +508,7 @@ def finalizar(
     return obter(supabase, user_id, atendimento_id)
 
 
-def cancelar(supabase: Client, user_id: str, atendimento_id: str) -> dict:
+def _cancelar_legado(supabase: Client, user_id: str, atendimento_id: str) -> dict:
     atendimento = _buscar_atendimento(supabase, user_id, atendimento_id)
     if atendimento["status"] == "cancelado":
         raise HTTPException(
@@ -502,7 +522,7 @@ def cancelar(supabase: Client, user_id: str, atendimento_id: str) -> dict:
     if atendimento["status"] == "finalizado":
         resp_mov = (
             supabase.table("estoque_movimentacoes")
-            .select("item_id, quantidade")
+            .select("item_id, quantidade, quantidade_consumida, unidade_consumo")
             .eq("atendimento_id", atendimento_id)
             .eq("tipo", "saida")
             .execute()
@@ -522,6 +542,8 @@ def cancelar(supabase: Client, user_id: str, atendimento_id: str) -> dict:
                 "item_id": mov["item_id"],
                 "tipo": "ajuste",
                 "quantidade": mov["quantidade"],
+                "quantidade_consumida": mov.get("quantidade_consumida"),
+                "unidade_consumo": mov.get("unidade_consumo"),
                 "motivo": "Estorno — atendimento cancelado",
                 "atendimento_id": atendimento_id,
                 "forcada": False,
@@ -532,6 +554,64 @@ def cancelar(supabase: Client, user_id: str, atendimento_id: str) -> dict:
         "cancelado_em": datetime.now(timezone.utc).isoformat(),
     }).eq("id", atendimento_id).execute()
 
+    return obter(supabase, user_id, atendimento_id)
+
+
+def _erro_fluxo(resultado: dict) -> None:
+    """Traduz o resultado deliberado das RPCs em um erro HTTP do contrato."""
+    codigo = resultado.get("codigo")
+    if codigo == "OK":
+        return
+    if codigo == "RECURSO_NAO_ENCONTRADO":
+        raise HTTPException(
+            status_code=404,
+            detail={"codigo": codigo, "mensagem": "Atendimento não encontrado"},
+        )
+    if codigo == "ESTOQUE_INSUFICIENTE":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "codigo": codigo,
+                "mensagem": "Alguns materiais estão sem saldo em estoque.",
+                "result": {"faltantes": resultado.get("faltantes", [])},
+            },
+        )
+    if codigo == "VALIDACAO_INVALIDA":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "codigo": codigo,
+                "mensagem": "Item de estoque inválido para este salão",
+                "result": {"item_estoque_ids": resultado.get("item_estoque_ids", [])},
+            },
+        )
+    raise HTTPException(
+        status_code=409,
+        detail={"codigo": "ATENDIMENTO_STATUS_INVALIDO", "mensagem": "Status do atendimento não permite esta operação"},
+    )
+
+
+def finalizar(
+    supabase: Client, user_id: str, atendimento_id: str, body: FinalizarBodyIn
+) -> dict:
+    """Finaliza pelo RPC 014: saldo, histórico, custo e status são atômicos."""
+    resultado = row(supabase.rpc("finalizar_atendimento_estoque", {
+        "p_atendimento_id": atendimento_id,
+        "p_user_id": user_id,
+        "p_materiais": [m.model_dump(exclude_none=True) for m in body.materiais],
+        "p_confirmar_estoque_insuficiente": body.confirmar_estoque_insuficiente,
+    }).execute().data)
+    _erro_fluxo(resultado)
+    return obter(supabase, user_id, atendimento_id)
+
+
+def cancelar(supabase: Client, user_id: str, atendimento_id: str) -> dict:
+    """Cancela pelo RPC 014, que estorna saídas originais somente uma vez."""
+    resultado = row(supabase.rpc("cancelar_atendimento_estoque", {
+        "p_atendimento_id": atendimento_id,
+        "p_user_id": user_id,
+    }).execute().data)
+    _erro_fluxo(resultado)
     return obter(supabase, user_id, atendimento_id)
 
 

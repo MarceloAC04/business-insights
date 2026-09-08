@@ -22,6 +22,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from datetime import date, datetime, timedelta
 
 import httpx
@@ -74,7 +75,13 @@ def garantir_usuaria_teste():
     usuarios = pagina if isinstance(pagina, list) else getattr(pagina, "users", pagina)
     existente = next((u for u in usuarios if getattr(u, "email", None) == EMAIL), None)
     if existente:
-        print(f"  usuária de teste já existe (id={existente.id})")
+        # A conta é exclusivamente de E2E. Reafirmar a senha torna o setup
+        # repetível mesmo se uma execução anterior ou alguém a tiver alterado.
+        admin.auth.admin.update_user_by_id(existente.id, {
+            "password": SENHA,
+            "email_confirm": True,
+        })
+        print(f"  usuária de teste pronta (id={existente.id})")
         return
 
     criado = admin.auth.admin.create_user({
@@ -154,7 +161,196 @@ def configurar_servicos():
 
 
 # ────────────────────────────────────────────────────────────────────
-# 3. Geração de atendimentos em dois meses diferentes (pro resumo)
+# 3. Estoque por rendimento: embalagem → uso → atendimento → alerta
+# ────────────────────────────────────────────────────────────────────
+
+def testar_estoque_por_rendimento():
+    """Exercita a etapa 2 contra o banco real, sempre em item/serviço únicos.
+
+    O saldo persistido continua em embalagens; o que a profissional enxerga e
+    informa no atendimento são usos. O teste deixa dados somente na conta E2E.
+    """
+    sufixo = uuid.uuid4().hex[:8]
+    nome_item = f"Creme de teste por usos {sufixo}"
+
+    resp = chamar("POST", "/estoque/itens", json={
+        "nome": nome_item,
+        "unidade": "un",
+        "categoria": "limpeza_pele",
+        "quantidade_atual": 6,
+        "quantidade_minima": 0,
+        "custo_unitario": 50.0,
+        "modo_controle": "rendimento_usos",
+        "usos_por_unidade": 10,
+        # 60 está ok antes da baixa; 59 deve entrar em alerta após o atendimento.
+        "usos_minimos": 59,
+    })
+    ok("POST /estoque/itens por rendimento", resp.status_code == 200, resp.text[:300])
+    item = resp.json()["result"]
+    item_id = item["id"]
+    ok("6 embalagens rendem 60 usos", item["usos_disponiveis"] == 60)
+    ok("custo inicial por uso é R$ 5", item["custo_por_uso"] == 5)
+
+    resp = chamar("POST", "/servicos", json={
+        "nome": f"Limpeza com creme {sufixo}",
+        "preco": 120.0,
+        "duracao_minutos": 45,
+        "produtos_padrao": [{"item_estoque_id": item_id, "quantidade": 1}],
+    })
+    ok("POST /servicos com 1 uso padrão", resp.status_code == 200, resp.text[:300])
+    servico_id = resp.json()["result"]["id"]
+
+    data_atendimento = (datetime.now() + timedelta(days=200)).replace(microsecond=0)
+    resp = chamar("POST", "/atendimentos", json={
+        "cliente_nome": f"Cliente rendimento {sufixo}",
+        "cliente_telefone": "11999998888",
+        "data": data_atendimento.isoformat(),
+        "servicos": [{"servico_id": servico_id}],
+    })
+    ok("POST /atendimentos com serviço de rendimento", resp.status_code == 200, resp.text[:300])
+    atendimento_id = resp.json()["result"]["id"]
+
+    resp = chamar("PATCH", f"/atendimentos/{atendimento_id}/finalizar", json={
+        "materiais": [{"item_estoque_id": item_id, "quantidade": 1}],
+        "confirmar_estoque_insuficiente": False,
+    })
+    ok("finalizar baixa 1 uso", resp.status_code == 200, resp.text[:300])
+    finalizado = resp.json()["result"]
+    material = next(m for m in finalizado["materiais"] if m["item_estoque_id"] == item_id)
+    ok("histórico do atendimento guarda 1 uso", material["quantidade"] == 1)
+    ok("histórico do atendimento usa custo proporcional", material["preco"] == 5)
+    ok("histórico identifica a unidade lógica", material["unidade_consumo"] == "uso")
+
+    resp = chamar("GET", "/estoque/itens")
+    ok("GET /estoque/itens após a baixa", resp.status_code == 200, resp.text[:300])
+    item_atual = next(i for i in resp.json()["result"]["itens"] if i["id"] == item_id)
+    ok("1 uso deixa 5,9 embalagens físicas", abs(item_atual["quantidade_atual"] - 5.9) < 0.0001)
+    ok("1 uso deixa 59 usos disponíveis", item_atual["usos_disponiveis"] == 59)
+    ok("limite em uso muda o status para alerta", item_atual["status_rendimento"] == "alerta")
+
+    resp = chamar("GET", "/estoque/movimentacoes", params={"item_id": item_id})
+    ok("GET /estoque/movimentacoes do item", resp.status_code == 200, resp.text[:300])
+    movimento = next(
+        m
+        for m in resp.json()["result"]["movimentacoes"]
+        if m["atendimento_id"] == atendimento_id
+    )
+    ok("movimentação preserva a fração física", abs(movimento["quantidade"] - 0.1) < 0.0001)
+    ok("movimentação preserva 1 uso", movimento["quantidade_consumida"] == 1)
+    ok("movimentação identifica uso", movimento["unidade_consumo"] == "uso")
+
+    resp = chamar("GET", "/alertas")
+    ok("GET /alertas após rendimento baixo", resp.status_code == 200, resp.text[:300])
+    alerta = next(
+        (
+            a
+            for a in resp.json()["result"]["alertas"]
+            if a["referencia_id"] == item_id and a["tipo"] == "estoque_baixo"
+        ),
+        None,
+    )
+    ok("central recebe alerta de rendimento baixo", alerta is not None)
+
+    resp = chamar("POST", f"/estoque/itens/{item_id}/movimentacoes", json={
+        "tipo": "entrada",
+        "quantidade": 1,
+        "custo_unitario": 50.0,
+        "motivo": "Compra de teste",
+    })
+    ok("compra acrescenta 1 embalagem", resp.status_code == 200, resp.text[:300])
+    item_reposto = resp.json()["result"]
+    ok("compra preserva saldo parcial e chega a 69 usos", item_reposto["usos_disponiveis"] == 69)
+
+    resp = chamar("POST", f"/estoque/itens/{item_id}/movimentacoes", json={
+        "tipo": "ajuste",
+        "quantidade": 0,
+        "motivo": "Conferência de teste: acabou",
+    })
+    ok("conferência aceita saldo zero", resp.status_code == 200, resp.text[:300])
+    item_conferido = resp.json()["result"]
+    ok("conferência define zero físico", item_conferido["quantidade_atual"] == 0)
+    ok("conferência define zero usos", item_conferido["usos_disponiveis"] == 0)
+
+    resp = chamar("GET", "/estoque/itens")
+    ok("GET /estoque/itens após conferência", resp.status_code == 200, resp.text[:300])
+    item_zerado = next(i for i in resp.json()["result"]["itens"] if i["id"] == item_id)
+    ok("saldo zero de rendimento fica crítico", item_zerado["status_rendimento"] == "critico")
+
+
+# ────────────────────────────────────────────────────────────────────
+# 3b. Fluxo atômico e sincronização da central sem visitar Estoque
+# ────────────────────────────────────────────────────────────────────
+
+def testar_fluxo_atomico_e_alertas_estoque():
+    """Cobre a migração 014 e a central calculada pela unidade correta."""
+    sufixo = uuid.uuid4().hex[:8]
+    resp = chamar("POST", "/estoque/itens", json={
+        "nome": f"Produto atômico {sufixo}",
+        "unidade": "un",
+        "categoria": "outro",
+        "quantidade_atual": 4,
+        "quantidade_minima": 3,
+        "custo_unitario": 10,
+    })
+    ok("POST item para fluxo atômico", resp.status_code == 200, resp.text[:300])
+    item_id = resp.json()["result"]["id"]
+
+    resp = chamar("POST", "/servicos", json={
+        "nome": f"Serviço atômico {sufixo}",
+        "preco": 80,
+        "duracao_minutos": 30,
+    })
+    ok("POST serviço para fluxo atômico", resp.status_code == 200, resp.text[:300])
+    servico_id = resp.json()["result"]["id"]
+
+    resp = chamar("POST", "/atendimentos", json={
+        "cliente_nome": f"Cliente atômico {sufixo}",
+        "cliente_telefone": "11999997777",
+        "data": (datetime.now() + timedelta(days=100)).replace(microsecond=0).isoformat(),
+        "servicos": [{"servico_id": servico_id}],
+    })
+    ok("POST atendimento para fluxo atômico", resp.status_code == 200, resp.text[:300])
+    atendimento_id = resp.json()["result"]["id"]
+    corpo_finalizacao = {
+        "materiais": [{"item_estoque_id": item_id, "quantidade": 1}],
+        "confirmar_estoque_insuficiente": False,
+    }
+
+    resp = chamar("PATCH", f"/atendimentos/{atendimento_id}/finalizar", json=corpo_finalizacao)
+    ok("finalização atômica", resp.status_code == 200, resp.text[:300])
+    resp = chamar("PATCH", f"/atendimentos/{atendimento_id}/finalizar", json=corpo_finalizacao)
+    ok("segunda finalização não duplica baixa", resp.status_code == 409, resp.text[:300])
+
+    # Sem GET /estoque/itens entre a baixa e a central: o alerta não depende
+    # de abrir a tela de estoque para existir.
+    resp = chamar("GET", "/alertas")
+    ok("central sincroniza estoque baixo", resp.status_code == 200, resp.text[:300])
+    ativo = next(
+        (a for a in resp.json()["result"]["alertas"] if a["referencia_id"] == item_id),
+        None,
+    )
+    ok("central tem um único alerta do item", ativo is not None and ativo["tipo"] == "estoque_baixo")
+
+    resp = chamar("POST", f"/estoque/itens/{item_id}/movimentacoes", json={
+        "tipo": "entrada",
+        "quantidade": 2,
+        "custo_unitario": 10,
+        "motivo": "Reposição de teste",
+    })
+    ok("reposição para resolver alerta", resp.status_code == 200, resp.text[:300])
+    resp = chamar("GET", "/alertas")
+    ok("central atualiza após reposição", resp.status_code == 200, resp.text[:300])
+    ainda_ativo = any(a["referencia_id"] == item_id for a in resp.json()["result"]["alertas"])
+    ok("reposição resolve alerta sem abrir estoque", not ainda_ativo)
+
+    resp = chamar("PATCH", f"/atendimentos/{atendimento_id}/cancelar")
+    ok("cancelamento estorna uma única vez", resp.status_code == 200, resp.text[:300])
+    resp = chamar("PATCH", f"/atendimentos/{atendimento_id}/cancelar")
+    ok("segundo cancelamento não duplica estorno", resp.status_code == 409, resp.text[:300])
+
+
+# ────────────────────────────────────────────────────────────────────
+# 4. Geração de atendimentos em dois meses diferentes (pro resumo)
 # ────────────────────────────────────────────────────────────────────
 
 CLIENTES = [
@@ -362,29 +558,35 @@ def main():
     slug = configurar_perfil()
     servico_ids = configurar_servicos()
 
-    passo("3. Atendimentos — mês anterior")
+    passo("3. Estoque por rendimento")
+    testar_estoque_por_rendimento()
+
+    passo("3b. Fluxos atômicos e alertas de estoque")
+    testar_fluxo_atomico_e_alertas_estoque()
+
+    passo("4. Atendimentos — mês anterior")
     hoje = date.today()
     mes_anterior = hoje.month - 1 or 12
     ano_mes_anterior = hoje.year if hoje.month > 1 else hoje.year - 1
     gerar_atendimentos(servico_ids, ano_mes_anterior, mes_anterior, quantidade=3)
 
-    passo("3b. Atendimentos — mês atual")
+    passo("4b. Atendimentos — mês atual")
     gerar_atendimentos(servico_ids, hoje.year, hoje.month, quantidade=4)
 
-    passo("4. Resumo mensal — comparando os dois meses")
+    passo("5. Resumo mensal — comparando os dois meses")
     resumo_anterior = testar_resumo(ano_mes_anterior, mes_anterior)
     resumo_atual = testar_resumo(hoje.year, hoje.month)
 
-    passo("5. Gastos")
+    passo("6. Gastos")
     testar_gastos()
 
-    passo("6. Alertas")
+    passo("7. Alertas")
     testar_alertas()
 
-    passo("7. Agendamento público — dois clientes no mesmo horário")
+    passo("8. Agendamento público — dois clientes no mesmo horário")
     testar_double_booking(slug, servico_ids)
 
-    passo("8. Agendamento público — fora do expediente")
+    passo("9. Agendamento público — fora do expediente")
     testar_agendamento_fora_expediente(slug, servico_ids)
 
     passo("TUDO PASSOU")

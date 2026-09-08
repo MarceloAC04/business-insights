@@ -611,7 +611,7 @@ function AtendimentoCard({
 
         {a.materiais.length ? (
           <p className="mt-2 truncate text-xs text-muted-foreground">
-            Produtos: {a.materiais.map((m) => `${m.nome} (${m.quantidade})`).join(", ")}
+            Produtos: {a.materiais.map((m) => `${m.nome} (${m.quantidade} ${m.unidade_consumo ?? ""})`).join(", ")}
           </p>
         ) : null}
       </button>
@@ -712,7 +712,10 @@ function DetalhesAtendimento({
                 {atendimento.materiais.map((material, indice) => (
                   <li key={`${material.item_estoque_id ?? material.nome}-${indice}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
                     <span className="min-w-0 text-sm font-medium">
-                      {material.nome} <span className="text-muted-foreground">× {material.quantidade}</span>
+                      {material.nome}{" "}
+                      <span className="text-muted-foreground">
+                        × {material.quantidade} {material.unidade_consumo ?? ""}
+                      </span>
                     </span>
                     <span className="shrink-0 text-sm text-muted-foreground">
                       {formatBRL(material.preco * material.quantidade)}
@@ -1005,9 +1008,10 @@ function DialogFinalizar({
 
   // Prévia local do custo, só para ela ver o lucro antes de confirmar. O número
   // que vale é o que o servidor grava com o custo médio do momento da baixa.
+  // Pote/frascos usam custo por uso, derivado desse mesmo custo médio.
   const custo = materiais.reduce((t, m) => {
     const item = itens.find((i) => i.id === m.item_estoque_id);
-    return t + (item ? item.custo_medio * m.quantidade : 0);
+    return t + (item ? (item.custo_por_uso ?? item.custo_medio) * m.quantidade : 0);
   }, 0);
   const lucro = atendimento.total_servicos - custo;
 
@@ -1154,16 +1158,21 @@ function ListaDeProdutos({
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium">{p.nome}</span>
                 <span className="block text-xs text-muted-foreground">
-                  Saldo: {p.quantidade_atual} {p.unidade} • {formatBRL(p.custo_medio)}
+                  {p.modo_controle === "rendimento_usos"
+                    ? `Disponível: ${p.usos_disponiveis ?? 0} usos • ${formatBRL(p.custo_por_uso ?? 0)}/uso`
+                    : `Saldo: ${p.quantidade_atual} ${p.unidade} • ${formatBRL(p.custo_medio)}`}
                 </span>
               </span>
             </label>
             {quantidade > 0 ? (
               <Input
-                type="number"
+                inputMode="decimal"
+                step="any"
                 min={1}
                 value={quantidade}
-                onChange={(e) => onMudar((s) => ({ ...s, [p.id]: Number(e.target.value) }))}
+                onChange={(e) =>
+                  onMudar((s) => ({ ...s, [p.id]: Number(e.target.value.replace(",", ".")) }))
+                }
                 className="h-9 w-16 rounded-lg text-center"
               />
             ) : null}
