@@ -33,6 +33,8 @@ export interface ItemBody {
   usos_por_unidade?: number | null;
   /** Em que capacidade de usos o alerta de reposição aparece. */
   usos_minimos?: number | null;
+  /** Confirma que o saldo atual já foi conferido em embalagens ao mudar para usos. */
+  confirmar_unidade_fisica?: boolean;
 }
 
 export interface MovimentacaoBody {

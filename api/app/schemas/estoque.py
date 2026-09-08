@@ -61,6 +61,7 @@ class ItemPatchIn(BaseModel):
     modo_controle: str | None = None
     usos_por_unidade: float | None = Field(default=None, allow_inf_nan=False)
     usos_minimos: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    confirmar_unidade_fisica: bool = False
 
     @model_validator(mode="after")
     def _validar(self):

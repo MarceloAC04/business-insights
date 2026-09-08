@@ -391,8 +391,12 @@ def editar(supabase: Client, user_id: str, item_id: str, body: ItemPatchIn) -> d
         campos["categoria"] = body.categoria
     if body.quantidade_minima is not None:
         campos["quantidade_minima"] = body.quantidade_minima
-    if body.codigo_barras is not None:
-        _validar_codigo_barras_livre(supabase, user_id, body.codigo_barras, ignorar_item_id=item_id)
+    # `None` também é uma edição válida: remove um código antes cadastrado.
+    if "codigo_barras" in body.model_fields_set:
+        if body.codigo_barras:
+            _validar_codigo_barras_livre(
+                supabase, user_id, body.codigo_barras, ignorar_item_id=item_id
+            )
         campos["codigo_barras"] = body.codigo_barras
     modo_destino = body.modo_controle or item_atual.get("modo_controle") or "quantidade"
     unidade_destino = body.unidade or item_atual.get("unidade")
@@ -402,6 +406,18 @@ def editar(supabase: Client, user_id: str, item_id: str, body: ItemPatchIn) -> d
         else item_atual.get("usos_por_unidade")
     )
     if modo_destino == "rendimento_usos":
+        if (
+            item_atual.get("modo_controle") != "rendimento_usos"
+            and item_atual.get("unidade") != "un"
+            and not body.confirmar_unidade_fisica
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "codigo": "CONFERIR_UNIDADE_FISICA",
+                    "mensagem": "Confira o saldo em embalagens antes de mudar este produto para controle por usos.",
+                },
+            )
         if unidade_destino != "un" or not usos_destino or float(usos_destino) <= 0:
             raise HTTPException(
                 status_code=422,

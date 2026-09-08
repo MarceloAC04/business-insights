@@ -581,6 +581,13 @@ histórico de custo dos atendimentos.
 obrigatoriamente `un` e o saldo começa no próprio cadastro; não há abertura de pote.
 Campos ou modos legados de duração retornam `422`.
 
+Ao editar um produto, saldo e custo não mudam: a tela usa conferência ou entrada para
+isso, preservando o histórico. A mudança de `quantidade` para `rendimento_usos` só é
+aceita para itens que já estão contados em `un`. Em ml, gramas ou caixas, o cliente
+precisa enviar `confirmar_unidade_fisica: true` depois de conferir que o saldo atual já
+representa embalagens; assim o servidor jamais converte ou reinterpreta a quantidade
+automaticamente. Enviar `codigo_barras: null` remove um código antes vinculado ao produto.
+
 ### `POST /estoque/itens/{id}/movimentacoes` — `NOVO`
 
 ```json

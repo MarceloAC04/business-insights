@@ -5,6 +5,7 @@ Testes unitários e de integração para o módulo /estoque.
 import uuid
 from unittest.mock import MagicMock
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -363,6 +364,102 @@ class TestEstoqueEscopoPorUsuario:
 
         chamadas_eq = [c.args for c in mock_table.eq.call_args_list]
         assert ("user_id", TEST_USER_ID) in chamadas_eq
+
+    def test_editar_item_remove_codigo_de_barras(self):
+        from app.schemas.estoque import ItemPatchIn
+
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.update.return_value = mock_table
+        linha = {
+            "id": TEST_ITEM_ID, "user_id": TEST_USER_ID, "nome": "Cola", "unidade": "un",
+            "categoria": "cilios", "quantidade_atual": 2.0, "quantidade_minima": 1.0,
+            "custo_medio": 20.0, "custo_ultima_compra": 20.0, "status": "ok",
+            "deficit": 0.0, "ativo": True, "codigo_barras": "789123",
+        }
+        mock_table.execute.side_effect = [
+            MagicMock(data=[linha]),
+            MagicMock(data=[]),
+            MagicMock(data=[{**linha, "codigo_barras": None}]),
+        ]
+        mock_sb.table.return_value = mock_table
+
+        estoque_service.editar(
+            mock_sb, TEST_USER_ID, TEST_ITEM_ID, ItemPatchIn(codigo_barras=None)
+        )
+
+        assert mock_table.update.call_args.args[0] == {"codigo_barras": None}
+
+    def test_editar_item_muda_para_rendimento_sem_alterar_saldo(self):
+        from app.schemas.estoque import ItemPatchIn
+
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.update.return_value = mock_table
+        linha = {
+            "id": TEST_ITEM_ID, "user_id": TEST_USER_ID, "nome": "Creme", "unidade": "un",
+            "categoria": "limpeza_pele", "quantidade_atual": 6.0, "quantidade_minima": 1.0,
+            "custo_medio": 50.0, "custo_ultima_compra": 50.0, "status": "ok",
+            "deficit": 0.0, "ativo": True, "codigo_barras": None,
+            "modo_controle": "quantidade", "usos_por_unidade": None, "usos_minimos": 0,
+        }
+        mock_table.execute.side_effect = [
+            MagicMock(data=[linha]),
+            MagicMock(data=[]),
+            MagicMock(data=[{**linha, "modo_controle": "rendimento_usos", "usos_por_unidade": 10, "usos_minimos": 10}]),
+        ]
+        mock_sb.table.return_value = mock_table
+
+        estoque_service.editar(
+            mock_sb,
+            TEST_USER_ID,
+            TEST_ITEM_ID,
+            ItemPatchIn(
+                unidade="un",
+                modo_controle="rendimento_usos",
+                usos_por_unidade=10,
+                usos_minimos=10,
+            ),
+        )
+
+        campos = mock_table.update.call_args.args[0]
+        assert campos["modo_controle"] == "rendimento_usos"
+        assert campos["usos_por_unidade"] == 10
+        assert campos["usos_minimos"] == 10
+        assert "quantidade_atual" not in campos
+
+    def test_editar_item_em_gramas_exige_confirmacao_para_mudar_para_usos(self):
+        from app.schemas.estoque import ItemPatchIn
+
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.execute.return_value = MagicMock(data=[{
+            "id": TEST_ITEM_ID, "nome": "Creme", "unidade": "g", "categoria": "limpeza_pele",
+            "quantidade_atual": 100.0, "quantidade_minima": 0, "custo_medio": 50,
+            "custo_ultima_compra": 50, "status": "ok", "deficit": 0, "ativo": True,
+            "codigo_barras": None, "modo_controle": "quantidade",
+        }])
+        mock_sb.table.return_value = mock_table
+
+        with pytest.raises(HTTPException) as erro:
+            estoque_service.editar(
+                mock_sb,
+                TEST_USER_ID,
+                TEST_ITEM_ID,
+                ItemPatchIn(
+                    unidade="un",
+                    modo_controle="rendimento_usos",
+                    usos_por_unidade=10,
+                ),
+            )
+
+        assert erro.value.detail["codigo"] == "CONFERIR_UNIDADE_FISICA"
 
 
 class TestRendimentoPorUsos:
