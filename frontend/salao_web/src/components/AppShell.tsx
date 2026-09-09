@@ -13,8 +13,9 @@ import {
 } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { PushNotificationControl } from "@/components/PushNotificationControl";
 import { cn } from "@/lib/utils";
-import { useAlertas, useLogout, useSessao } from "@/lib/queries";
+import { useAlertas, useAlertasEmTempoReal, useLogout, useSessao } from "@/lib/queries";
 import type { Alerta } from "@/lib/types";
 
 const NAV = [
@@ -100,6 +101,7 @@ export function AppShell({
   const navigate = useNavigate();
   const sair = useLogout();
 
+  useAlertasEmTempoReal();
   const { data: alertas } = useAlertas();
   const naoLidos = alertas?.total_nao_lidos ?? 0;
   // Um único crítico no topo: a lista inteira mora na central de alertas.
@@ -239,6 +241,8 @@ export function AppShell({
             ))}
           </div>
         </nav>
+
+        <PushNotificationControl />
       </div>
     </div>
   );

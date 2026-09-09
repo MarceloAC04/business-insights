@@ -378,6 +378,20 @@ export interface AgendamentoCriado {
 
 // ── resumo ───────────────────────────────────────────────────────────────────
 
+export interface ValorComparado {
+  atual: number;
+  anterior: number;
+  variacao_percentual: number | null;
+}
+
+export interface ResumoComparacao {
+  periodo_atual: string;
+  periodo_anterior: string;
+  faturamento: ValorComparado;
+  gastos: ValorComparado;
+  lucro: ValorComparado;
+}
+
 export interface PontoHistorico {
   ano: number;
   mes: number;
@@ -424,6 +438,27 @@ export interface ResumoMensal {
     saldo_mes_anterior: number;
     servico_mais_lucrativo: { nome: string; lucro: number } | null;
   };
+  comparacao: ResumoComparacao;
+  alerta_zero_a_zero: boolean;
+}
+
+export interface ResumoAnual {
+  ano: number;
+  saldo_final: number;
+  entrou: number;
+  saiu: number;
+  meta_faturamento_anual: number;
+  historico_doze_meses: PontoHistorico[];
+  receita: ResumoMensal["receita"];
+  gastos: ResumoMensal["gastos"];
+  insights: {
+    ticket_medio: number;
+    margem_lucro_percentual: number;
+    variacao_percentual_ano_anterior: number;
+    saldo_ano_anterior: number;
+    servico_mais_lucrativo: { nome: string; lucro: number } | null;
+  };
+  comparacao: ResumoComparacao;
   alerta_zero_a_zero: boolean;
 }
 

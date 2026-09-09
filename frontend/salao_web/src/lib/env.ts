@@ -20,4 +20,7 @@ export const AppEnvironment = {
    * não é offline-first — o estado vive na aba e some quando ela fecha.
    */
   isDemo: import.meta.env["VITE_DEMO_MODE"] === "true",
+
+  /** Chave pública VAPID; a privada existe somente na API. */
+  webPushPublicKey: import.meta.env["VITE_WEB_PUSH_PUBLIC_KEY"] ?? "",
 } as const;

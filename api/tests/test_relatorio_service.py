@@ -12,7 +12,7 @@ Rodar com: pytest tests/test_relatorio_service.py -v
 
 import pytest
 from unittest.mock import MagicMock
-from app.services.relatorio_service import calcular_resumo_mensal
+from app.services.relatorio_service import calcular_resumo_anual, calcular_resumo_mensal
 
 
 # ── Helpers de mock ─────────────────────────────────────────────────
@@ -344,3 +344,54 @@ class TestCalculoResumoMensal:
         sb = mock_supabase(meta_faturamento_mensal=15000.0)
         resumo = await calcular_resumo_mensal(sb, USER_ID, ANO, MES)
         assert resumo.meta_faturamento_mensal == 15000.0
+
+
+class TestCalculoResumoAnual:
+
+    @pytest.mark.asyncio
+    async def test_consolida_doze_meses_e_compara_com_ano_anterior(self):
+        sb = mock_supabase(
+            atendimentos_por_inicio={
+                _iso(ANO - 1, 1): [
+                    {
+                        "id": "anterior",
+                        "data": f"{ANO - 1}-01-15",
+                        "atendimento_servicos": [{"nome_servico": "Sobrancelha", "preco_snapshot": 100.0}],
+                        "atendimento_insumos": [],
+                    },
+                    {
+                        "id": "atual-jan",
+                        "data": f"{ANO}-01-15",
+                        "atendimento_servicos": [{"nome_servico": "Sobrancelha", "preco_snapshot": 100.0}],
+                        "atendimento_insumos": [],
+                    },
+                    {
+                        "id": "atual-dez",
+                        "data": f"{ANO}-12-15",
+                        "atendimento_servicos": [{"nome_servico": "Extensão de cílios", "preco_snapshot": 200.0}],
+                        "atendimento_insumos": [{"preco": 20.0}],
+                    },
+                ]
+            },
+            gastos_por_inicio={
+                _iso(ANO - 1, 1): [
+                    {"prazo": f"{ANO - 1}-01-05", "valor": 20.0},
+                    {"prazo": f"{ANO}-01-05", "valor": 50.0},
+                ]
+            },
+            custos_fixos=[{"valor": 100.0, "criado_em": "2020-01-01"}],
+            meta_faturamento_mensal=9000.0,
+        )
+
+        resumo = await calcular_resumo_anual(sb, USER_ID, ANO)
+
+        assert len(resumo.historico_doze_meses) == 12
+        assert resumo.historico_doze_meses[0].receitas == 100.0
+        assert resumo.historico_doze_meses[11].receitas == 200.0
+        assert resumo.entrou == 300.0
+        assert resumo.saiu == 1250.0
+        assert resumo.saldo_final == -950.0
+        assert resumo.comparacao.faturamento.anterior == 100.0
+        assert resumo.comparacao.gastos.anterior == 1220.0
+        assert resumo.comparacao.lucro.anterior == -1120.0
+        assert resumo.comparacao.lucro.variacao_percentual == pytest.approx(15.18, abs=0.01)

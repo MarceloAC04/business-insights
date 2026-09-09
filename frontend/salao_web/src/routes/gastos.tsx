@@ -33,7 +33,15 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { GastoBody } from "@/lib/api";
-import { formatBRL, formatDate, formatMoedaInput, MESES, nomeMes, parseMoedaInput, pluralizar } from "@/lib/format";
+import {
+  formatBRL,
+  formatDate,
+  formatMoedaInput,
+  MESES,
+  nomeMes,
+  parseMoedaInput,
+  pluralizar,
+} from "@/lib/format";
 import {
   textoDoErro,
   useCriarGasto,
@@ -234,7 +242,7 @@ function GastosPage() {
           </TabsList>
         </Tabs>
         <Select value={categoria} onValueChange={(v) => setCategoria(v as typeof categoria)}>
-          <SelectTrigger className="h-11 w-[160px] rounded-xl bg-surface">
+          <SelectTrigger className="h-11 w-full rounded-xl bg-surface sm:w-[160px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -247,7 +255,7 @@ function GastosPage() {
           </SelectContent>
         </Select>
         <Select value={String(mes)} onValueChange={(v) => setMes(Number(v))}>
-          <SelectTrigger className="h-11 w-[150px] rounded-xl bg-surface">
+          <SelectTrigger className="h-11 w-[calc(50%-0.25rem)] rounded-xl bg-surface sm:w-[150px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -259,7 +267,7 @@ function GastosPage() {
           </SelectContent>
         </Select>
         <Select value={String(ano)} onValueChange={(v) => setAno(Number(v))}>
-          <SelectTrigger className="h-11 w-[110px] rounded-xl bg-surface">
+          <SelectTrigger className="h-11 w-[calc(50%-0.25rem)] rounded-xl bg-surface sm:w-[110px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -273,7 +281,9 @@ function GastosPage() {
       </div>
 
       <div className="mt-4">
-        <SectionTitle hint={`${lista.length} ${pluralizar(lista.length, "lançamento")}`}>Lançamentos</SectionTitle>
+        <SectionTitle hint={`${lista.length} ${pluralizar(lista.length, "lançamento")}`}>
+          Lançamentos
+        </SectionTitle>
         {isPending ? (
           <ListSkeleton />
         ) : isError ? (

@@ -128,10 +128,11 @@ PATCH  /servicos/{id}
 DELETE /servicos/{id}                   <- soft delete se já foi usado
 ```
 
-### `alertas` — 7 · todas novas
+### `alertas` — 8 · todas novas
 
 ```
 GET    /alertas                         <- devolve total_nao_lidos e resumo (o badge)
+GET    /alertas/eventos                 <- canal SSE de alterações em tempo real
 PATCH  /alertas/{id}/lido
 PATCH  /alertas/lidos
 GET    /alertas/preferencias
@@ -267,7 +268,11 @@ Novas variáveis em `api/.env`:
 ```bash
 SUPABASE_JWT_SECRET=...     # Dashboard > Settings > API > JWT Secret
 N8N_SECRET=...              # já existe; passa a ser exigido em TODO ambiente
-FCM_SERVER_KEY=...          # só no L6
+WEB_PUSH_VAPID_PUBLIC_KEY=...   # L6 — chave pública, pode ir para o frontend
+WEB_PUSH_VAPID_PRIVATE_KEY=...  # L6 — somente na API
+WEB_PUSH_VAPID_SUBJECT=mailto:... # L6 — contato do dono das chaves
+UPSTASH_REDIS_REST_URL=...             # L6 — Pub/Sub opcional para tempo real
+UPSTASH_REDIS_REST_TOKEN=...           # L6 — somente na API
 ```
 
 A API precisa servir sob o prefixo **`/v1`** e liberar **CORS** para a origem do

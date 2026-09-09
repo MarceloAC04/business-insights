@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from app.schemas.limites import LIMITE_VALOR_INPUT
 
 
@@ -82,10 +82,28 @@ class PreferenciasAlertaUpdateIn(BaseModel):
 
 # ── Dispositivos Push ────────────────────────────────────────────────
 
+class ChavesWebPushIn(BaseModel):
+    p256dh: str = Field(min_length=1)
+    auth: str = Field(min_length=1)
+
+
+class AssinaturaWebPushIn(BaseModel):
+    endpoint: str = Field(min_length=1)
+    keys: ChavesWebPushIn
+
 class DispositivoIn(BaseModel):
     token: str = Field(min_length=1)
     plataforma: PlataformaDispositivo
     modelo: str = Field(default="")
+    assinatura_web_push: AssinaturaWebPushIn | None = None
+
+    @model_validator(mode="after")
+    def validar_assinatura_web(self):
+        if self.plataforma == "web" and self.assinatura_web_push is None:
+            raise ValueError("assinatura_web_push é obrigatória para a plataforma web")
+        if self.assinatura_web_push and self.assinatura_web_push.endpoint != self.token:
+            raise ValueError("token deve ser o endpoint da assinatura web")
+        return self
 
 
 class DispositivoOut(BaseModel):

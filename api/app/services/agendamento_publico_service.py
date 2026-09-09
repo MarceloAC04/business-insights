@@ -25,10 +25,17 @@ frontend.
 """
 
 from datetime import datetime
+import logging
 
 from postgrest.exceptions import APIError
 from fastapi import HTTPException
 from supabase import Client
+
+from app.core.supabase_client import row
+from app.services import push_service
+
+
+logger = logging.getLogger(__name__)
 
 
 def _erro_rpc(exc: APIError) -> HTTPException:
@@ -91,6 +98,7 @@ def criar_agendamento(
     cliente_telefone: str,
     data_hora: datetime,
     servico_ids: list[str],
+    supabase_push: Client | None = None,
 ) -> dict:
     """Devolve `{"id", "data", "status", "servicos": [{"servico_id", "nome", "preco"}]}`."""
     try:
@@ -106,4 +114,35 @@ def criar_agendamento(
         ).execute()
     except APIError as exc:
         raise _erro_rpc(exc)
-    return resp.data
+    resultado = resp.data
+    if supabase_push is not None:
+        try:
+            perfil = row(
+                supabase_push.table("perfil_salao")
+                .select("user_id")
+                .eq("slug_agendamento", slug)
+                .limit(1)
+                .execute()
+                .data
+            )
+            user_id = perfil.get("user_id")
+            if user_id:
+                push_service.notificar_alerta_novo(
+                    supabase=supabase_push,
+                    user_id=str(user_id),
+                    alerta={
+                        "tipo": "agendamento_publico_novo",
+                        "severidade": "info",
+                        "titulo": "Novo agendamento pelo link",
+                        "mensagem": f"{cliente_nome.strip()} marcou horário pelo link de agendamento",
+                        "referencia_tipo": "atendimento",
+                        "referencia_id": resultado["id"],
+                        "chave_dedupe": f"agendamento_publico_novo:{resultado['id']}",
+                    },
+                )
+        except Exception as exc:  # o agendamento já foi confirmado; push é best-effort
+            logger.warning(
+                "Falha ao preparar push de agendamento público: tipo=%s",
+                type(exc).__name__,
+            )
+    return resultado

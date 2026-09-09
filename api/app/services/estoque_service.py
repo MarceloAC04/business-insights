@@ -12,6 +12,8 @@ from app.core.supabase_client import row, rows
 from app.schemas.gastos import GastoIn
 from app.schemas.estoque import ItemIn, ItemPatchIn, MovimentacaoIn
 from app.services import gastos_service
+from app.services import push_service
+from app.services import realtime_service
 from app.services.estoque_rendimento import (
     custo_por_unidade_consumo,
     e_rendimento,
@@ -145,16 +147,19 @@ def _registrar_alerta_vivo(supabase: Client, user_id: str, chave: str, dados: di
     )
     if existentes:
         tabela.update(dados).eq("id", existentes[0]["id"]).eq("user_id", user_id).execute()
+        realtime_service.sinalizar_alertas(user_id)
         return
 
     try:
         tabela.insert(dados).execute()
+        push_service.notificar_alerta_novo(supabase=supabase, user_id=user_id, alerta=dados)
     except APIError as exc:
         if getattr(exc, "code", None) != "23505":
             raise
         tabela.update(dados).eq("user_id", user_id).eq("chave_dedupe", chave).is_(
             "resolvido_em", "null"
         ).execute()
+        realtime_service.sinalizar_alertas(user_id)
 
 
 def _gerar_alertas_rendimento(supabase: Client, user_id: str, itens: list[dict]) -> None:
@@ -199,6 +204,7 @@ def _gerar_alertas_rendimento(supabase: Client, user_id: str, itens: list[dict])
             supabase.table("alertas").update({"resolvido_em": agora_iso}).eq(
                 "user_id", user_id
             ).eq("chave_dedupe", chave).is_("resolvido_em", "null").execute()
+            realtime_service.sinalizar_alertas(user_id)
 
 
 _JANELA_PLANEJAMENTO_DIAS = 30

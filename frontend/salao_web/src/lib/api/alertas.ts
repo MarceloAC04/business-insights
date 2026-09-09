@@ -2,8 +2,23 @@ import { AppApi } from "../http";
 import type { AlertasPagina, PreferenciasAlerta } from "../types";
 import { Paths } from "./paths";
 
+export interface AssinaturaWebPushBody {
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+}
+
+export interface RegistrarDispositivoBody {
+  token: string;
+  plataforma: "android" | "ios" | "web";
+  modelo?: string;
+  assinatura_web_push?: AssinaturaWebPushBody;
+}
+
 /**
- * `alertas` — 7 operações (§9 do contrato).
+ * `alertas` — 8 operações (§9 do contrato).
  *
  * Quem decide o que é alerta é o servidor: estoque baixo, gasto a vencer, custo
  * fixo vencido, saldo negativo, zero a zero. A tela só lista e marca como lido
@@ -20,6 +35,10 @@ export const AlertasApi = {
       // existem apenas alertas novos.
       apenas_nao_lidos: apenasNaoLidos ? true : undefined,
     }).then((r) => r.result);
+  },
+
+  eventos(sinal?: AbortSignal): Promise<Response> {
+    return AppApi.stream(Paths.eventosAlertas, sinal);
   },
 
   marcarLido(id: string): Promise<void> {
@@ -39,11 +58,7 @@ export const AlertasApi = {
   },
 
   /** Idempotente por token. */
-  registrarDispositivo(body: {
-    token: string;
-    plataforma: "android" | "ios" | "web";
-    modelo?: string;
-  }): Promise<void> {
+  registrarDispositivo(body: RegistrarDispositivoBody): Promise<void> {
     return AppApi.post(Paths.dispositivos, body).then(() => undefined);
   },
 

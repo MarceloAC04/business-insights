@@ -93,6 +93,10 @@ function rotear(
           inteiro(query, "mes", agora.getMonth() + 1),
         );
       }
+      if (metodo === "GET" && id === "anual") {
+        const agora = new Date();
+        return db.getResumoAnual(inteiro(query, "ano", agora.getFullYear()));
+      }
       return naoEncontrado(metodo, path);
 
     case "precificacao":

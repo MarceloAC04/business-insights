@@ -59,6 +59,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def impedir_cache_de_dados(request, call_next):
+    """Dados autenticados não devem virar resposta 304 sem envelope."""
+    response = await call_next(request)
+    if request.url.path.startswith("/v1/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
 # ── Envelope de resposta ──────────────────────────────────────────
 # HTTPException, erro de validação (422) e exceção genérica (500) — as três
 # fontes possíveis de erro — passam a sair sempre como

@@ -117,12 +117,30 @@ async function executar<T>(metodo: Metodo, path: string, opcoes: Opcoes): Promis
   try {
     // `body` entra só quando existe: `fetch` recusa a chave presente com valor
     // `undefined` num GET.
-    const init: RequestInit = { method: metodo, headers };
+    const init: RequestInit = { method: metodo, headers, cache: "no-store" };
     if (opcoes.body !== undefined) {
       init.body = ehFormulario(opcoes.body) ? opcoes.body : JSON.stringify(opcoes.body);
     }
     resposta = await fetch(montarUrl(path, opcoes.query), init);
-  } catch {
+    // 304 é válido para recursos cacheados, mas uma API autenticada precisa
+    // devolver o envelope completo para o TanStack Query. Se algum proxy ainda
+    // responder 304, refazemos apenas GET com uma URL nova e cache revalidado.
+    if (resposta.status === 304 && metodo === "GET") {
+      const urlAtualizada = montarUrl(path, {
+        ...opcoes.query,
+        _atualizacao: Date.now(),
+      });
+      resposta = await fetch(urlAtualizada, {
+        ...init,
+        cache: "reload",
+        headers: { ...headers, "Cache-Control": "no-cache", Pragma: "no-cache" },
+      });
+    }
+    if (resposta.status === 304) {
+      throw new ApiError(304, null, "Os dados ficaram desatualizados. Atualize a tela e tente novamente.");
+    }
+  } catch (erro) {
+    if (erro instanceof ApiError) throw erro;
     throw erroDeConexao();
   }
 
@@ -175,6 +193,45 @@ async function request<T>(metodo: Metodo, path: string, opcoes: Opcoes = {}): Pr
   }
 }
 
+/** Abre um stream autenticado sem expor o token do backend ao navegador. */
+async function stream(path: string, sinal?: AbortSignal): Promise<Response> {
+  if (AppEnvironment.isDemo) {
+    throw new ApiError(204, null, "Canal realtime indisponível no modo demo.");
+  }
+
+  const token = AppStorage.token;
+  const headers: Record<string, string> = {
+    Accept: "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Accept-Language": "pt-BR",
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const opcoes: RequestInit = {
+    method: "GET",
+    headers,
+    cache: "no-store",
+  };
+  if (sinal) opcoes.signal = sinal;
+
+  let resposta = await fetch(montarUrl(path), opcoes);
+
+  if (resposta.status === 401 && (await renovarToken())) {
+    const tokenAtualizado = AppStorage.token;
+    if (tokenAtualizado) headers["Authorization"] = `Bearer ${tokenAtualizado}`;
+    resposta = await fetch(montarUrl(path), opcoes);
+  }
+
+  if (resposta.status === 401) {
+    derrubarSessao();
+    throw new ApiError(401, null, "Sua sessão expirou.");
+  }
+  if (!resposta.ok && resposta.status !== 204) {
+    throw new ApiError(resposta.status, null, "Canal de alertas indisponível.");
+  }
+  return resposta;
+}
+
 export const AppApi = {
   get: <T>(path: string, query?: Query) => request<T>("GET", path, { query }),
   post: <T>(path: string, body?: unknown, query?: Query) =>
@@ -183,6 +240,7 @@ export const AppApi = {
   put: <T>(path: string, body?: unknown) => request<T>("PUT", path, { body }),
   patch: <T>(path: string, body?: unknown) => request<T>("PATCH", path, { body }),
   delete: <T>(path: string, body?: unknown) => request<T>("DELETE", path, { body }),
+  stream,
   /** Fluxo que precisa de credencial diferente da sessão (o login e o refresh). */
   postSemToken: <T>(path: string, body?: unknown) =>
     request<T>("POST", path, { body, semToken: true }),

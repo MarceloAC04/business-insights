@@ -125,7 +125,13 @@ function AlertasPage() {
               const lido = a.lido_em !== null;
               return (
                 <li key={a.id}>
-                  <Card className={lido ? "p-4 opacity-70" : "p-4"}>
+                  <Card
+                    className={
+                      lido
+                        ? "border-l-4 border-l-muted-foreground/20 bg-surface p-4"
+                        : "border-primary/60 border-l-4 border-l-primary bg-primary/5 p-4 shadow-md shadow-primary/10"
+                    }
+                  >
                     <div className="flex items-start gap-3">
                       <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-accent text-accent-foreground">
                         <Icone className="size-5" />
@@ -133,9 +139,17 @@ function AlertasPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <Pill tone={c.tone}>{c.rotulo}</Pill>
-                          {!lido ? <Pill tone="brand">Novo</Pill> : null}
+                          {!lido ? (
+                            <Pill tone="brand" className="border border-primary/30">
+                              Não lido
+                            </Pill>
+                          ) : (
+                            <Pill tone="neutral">Lido</Pill>
+                          )}
                         </div>
-                        <p className="mt-1.5 font-semibold">{a.titulo}</p>
+                        <p className={lido ? "mt-1.5 font-semibold" : "mt-1.5 font-bold"}>
+                          {a.titulo}
+                        </p>
                         <p className="mt-0.5 text-sm text-muted-foreground">{a.mensagem}</p>
                         <p className="mt-1 text-xs text-muted-foreground">
                           {formatDate(a.criado_em)}

@@ -7,6 +7,7 @@ import pytest
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from jose import jwt
+from supabase_auth.errors import AuthApiError, AuthRetryableError
 
 import os
 os.environ.setdefault("SUPABASE_URL", "https://mock.supabase.co")
@@ -118,7 +119,9 @@ class TestAuthEndpoints:
 
     def test_login_invalid_credentials(self, client):
         mock_sb_auth = MagicMock()
-        mock_sb_auth.auth.sign_in_with_password.side_effect = Exception("Invalid login")
+        mock_sb_auth.auth.sign_in_with_password.side_effect = AuthApiError(
+            "Invalid login credentials", 400, "invalid_credentials"
+        )
 
         app.dependency_overrides[get_supabase_auth] = lambda: mock_sb_auth
         try:
@@ -129,6 +132,26 @@ class TestAuthEndpoints:
             assert response.status_code == 401
             data = response.json()
             assert data["codigo"] == "AUTH_CREDENCIAIS_INVALIDAS"
+            assert data["result"] is None
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_login_indisponibilidade_do_provedor_nao_vira_erro_de_senha(self, client):
+        mock_sb_auth = MagicMock()
+        mock_sb_auth.auth.sign_in_with_password.side_effect = AuthRetryableError(
+            "Auth service unavailable", 503
+        )
+
+        app.dependency_overrides[get_supabase_auth] = lambda: mock_sb_auth
+        try:
+            response = client.post(
+                "/v1/auth/login",
+                json={"email": "teste@salao.app", "senha": "password123"},
+            )
+            assert response.status_code == 503
+            data = response.json()
+            assert data["codigo"] == "AUTH_SERVICO_INDISPONIVEL"
+            assert data["mensagem"] == "O serviço de login está indisponível no momento"
             assert data["result"] is None
         finally:
             app.dependency_overrides.clear()

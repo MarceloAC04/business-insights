@@ -25,6 +25,8 @@ from app.services.estoque_rendimento import (
     rotulo_quantidade,
     unidade_consumo,
 )
+from app.services import push_service
+from app.services import realtime_service
 
 
 _CAMPOS_ITEM_ESTOQUE = (
@@ -46,9 +48,11 @@ def _registrar_alerta_vivo(supabase: Client, user_id: str, chave: str, dados: di
     )
     if existentes:
         tabela.update(dados).eq("id", existentes[0]["id"]).eq("user_id", user_id).execute()
+        realtime_service.sinalizar_alertas(user_id)
         return
     try:
         tabela.insert(dados).execute()
+        push_service.notificar_alerta_novo(supabase=supabase, user_id=user_id, alerta=dados)
     except APIError as exc:
         # O índice parcial único cobre duas consultas à central que ocorram ao
         # mesmo tempo. A segunda apenas atualiza a ocorrência vencedora.
@@ -72,7 +76,25 @@ def _sincronizar_alertas_estoque(supabase: Client, user_id: str) -> None:
         .eq("ativo", True)
         .execute().data
     )
+    # A central é consultada depois de quase toda escrita. Ler os alertas de
+    # estoque abertos uma vez evita uma consulta de existência para cada item.
+    existentes = rows(
+        supabase.table("alertas")
+        .select("id, referencia_id, chave_dedupe, tipo, titulo, mensagem")
+        .eq("user_id", user_id)
+        .eq("referencia_tipo", "estoque_item")
+        .is_("resolvido_em", "null")
+        .execute().data
+    )
+    por_item: dict[str, list[dict]] = {}
+    for alerta in existentes:
+        referencia_id = alerta.get("referencia_id")
+        if referencia_id:
+            por_item.setdefault(str(referencia_id), []).append(alerta)
+
     agora_iso = datetime.now(timezone.utc).isoformat()
+    houve_alteracao_sem_evento = False
+    ids_para_resolver: list[str] = []
     for item in itens:
         por_usos = e_rendimento(item)
         saldo = (
@@ -99,47 +121,59 @@ def _sincronizar_alertas_estoque(supabase: Client, user_id: str) -> None:
         else:
             tipo = None
 
+        abertos_do_item = por_item.get(str(item["id"]), [])
         if tipo is None:
-            (
-                supabase.table("alertas")
-                .update({"resolvido_em": agora_iso})
-                .eq("user_id", user_id)
-                .eq("referencia_tipo", "estoque_item")
-                .eq("referencia_id", item["id"])
-                .is_("resolvido_em", "null")
-                .execute()
+            ids_para_resolver.extend(
+                str(alerta["id"])
+                for alerta in abertos_do_item
+                if alerta.get("id")
             )
             continue
 
         # Alertas específicos de uma finalização forçada e os criados pelas
         # versões anteriores são substituídos pela condição atual do produto.
         # Assim a central continua com um aviso, e não vários, para o mesmo item.
-        (
-            supabase.table("alertas")
-            .update({"resolvido_em": agora_iso})
-            .eq("user_id", user_id)
-            .eq("referencia_tipo", "estoque_item")
-            .eq("referencia_id", item["id"])
-            .neq("chave_dedupe", chave)
-            .is_("resolvido_em", "null")
-            .execute()
+        atual = next((alerta for alerta in abertos_do_item if alerta.get("chave_dedupe") == chave), None)
+        ids_para_resolver.extend(
+            str(alerta["id"])
+            for alerta in abertos_do_item
+            if alerta.get("id") and alerta is not atual
         )
-        _registrar_alerta_vivo(
-            supabase,
-            user_id,
-            chave,
-            {
-                "user_id": user_id,
-                "tipo": tipo,
-                "severidade": severidade,
-                "titulo": titulo,
-                "mensagem": mensagem,
-                "referencia_tipo": "estoque_item",
-                "referencia_id": item["id"],
-                "chave_dedupe": chave,
-                "resolvido_em": None,
-            },
-        )
+        dados = {
+            "user_id": user_id,
+            "tipo": tipo,
+            "severidade": severidade,
+            "titulo": titulo,
+            "mensagem": mensagem,
+            "referencia_tipo": "estoque_item",
+            "referencia_id": item["id"],
+            "chave_dedupe": chave,
+            "resolvido_em": None,
+        }
+        if atual is None:
+            try:
+                supabase.table("alertas").insert(dados).execute()
+                push_service.notificar_alerta_novo(
+                    supabase=supabase, user_id=user_id, alerta=dados
+                )
+            except APIError as exc:
+                # Outra consulta pode ter criado o mesmo alerta entre a leitura
+                # acima e o insert; o índice único mantém apenas um registro.
+                if getattr(exc, "code", None) != "23505":
+                    raise
+        elif any(atual.get(campo) != dados[campo] for campo in ("tipo", "severidade", "titulo", "mensagem")):
+            supabase.table("alertas").update(dados).eq("id", atual["id"]).eq(
+                "user_id", user_id
+            ).execute()
+            houve_alteracao_sem_evento = True
+
+    if ids_para_resolver:
+        supabase.table("alertas").update({"resolvido_em": agora_iso}).eq(
+            "user_id", user_id
+        ).in_("id", list(dict.fromkeys(ids_para_resolver))).execute()
+        houve_alteracao_sem_evento = True
+    if houve_alteracao_sem_evento:
+        realtime_service.sinalizar_alertas(user_id)
 
 
 def _converter_linha_alerta(linha: dict) -> AlertaOut:
@@ -177,6 +211,7 @@ def listar_alertas(
         query = query.eq("severidade", severidade)
 
     linhas = rows(query.order("criado_em", desc=True).execute().data)
+    push_service.notificar_alertas_pendentes(supabase, user_id, linhas)
 
     # Busca todos os ativos não lidos para calcular o badge e resumo
     resp_ativos_nao_lidos = (
@@ -220,6 +255,7 @@ def marcar_alerta_lido(supabase: Client, user_id: str, alerta_id: str) -> Alerta
 
     agora_iso = datetime.now(timezone.utc).isoformat()
     supabase.table("alertas").update({"lido_em": agora_iso}).eq("id", alerta_id).eq("user_id", user_id).execute()
+    realtime_service.sinalizar_alertas(user_id, tipo="leitura")
 
     resp_atualizada = (
         supabase.table("alertas")
@@ -242,6 +278,7 @@ def marcar_todos_lidos(supabase: Client, user_id: str, dados: MarcarLidosIn) -> 
     if dados.tipo:
         query = query.eq("tipo", dados.tipo)
     query.execute()
+    realtime_service.sinalizar_alertas(user_id, tipo="leitura")
 
 
 def _buscar_preferencias_db(supabase: Client, user_id: str) -> dict:
@@ -305,21 +342,29 @@ def atualizar_preferencias(
 
 def registrar_dispositivo(supabase: Client, user_id: str, dados: DispositivoIn) -> DispositivoOut:
     agora_iso = datetime.now(timezone.utc).isoformat()
-    resp = (
-        supabase.table("dispositivos")
-        .upsert(
-            {
-                "user_id": user_id,
-                "token": dados.token,
-                "plataforma": dados.plataforma,
-                "modelo": dados.modelo,
-                "ativo": True,
-                "usado_em": agora_iso,
-            },
-            on_conflict="token",
-        )
-        .execute()
-    )
+    registro = {
+        "user_id": user_id,
+        "token": dados.token,
+        "plataforma": dados.plataforma,
+        "modelo": dados.modelo,
+        "ativo": True,
+        "usado_em": agora_iso,
+    }
+    if dados.assinatura_web_push is not None:
+        registro["assinatura_web_push"] = dados.assinatura_web_push.model_dump()
+
+    try:
+        resp = supabase.table("dispositivos").upsert(registro, on_conflict="token").execute()
+    except APIError as exc:
+        if dados.plataforma == "web" and getattr(exc, "code", None) == "42703":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "codigo": "PUSH_NAO_CONFIGURADO",
+                    "mensagem": "As notificações ainda não foram configuradas no servidor.",
+                },
+            ) from exc
+        raise
     linha = row(resp.data)
     return DispositivoOut(
         id=str(linha["id"]),

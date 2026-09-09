@@ -7,6 +7,7 @@
  */
 export const AppErrorCodes = {
   invalidCredentials: "AUTH_CREDENCIAIS_INVALIDAS",
+  authServiceUnavailable: "AUTH_SERVICO_INDISPONIVEL",
   invalidRefresh: "AUTH_REFRESH_INVALIDO",
   missingToken: "AUTH_TOKEN_AUSENTE",
   invalidValidation: "VALIDACAO_INVALIDA",
@@ -19,6 +20,7 @@ export const AppErrorCodes = {
   rateLimited: "LIMITE_EXCEDIDO",
   barcodeAlreadyUsed: "CODIGO_BARRAS_JA_CADASTRADO",
   slotUnavailable: "HORARIO_INDISPONIVEL",
+  pushNotConfigured: "PUSH_NAO_CONFIGURADO",
 } as const;
 
 export type AppErrorCode = (typeof AppErrorCodes)[keyof typeof AppErrorCodes];
@@ -26,6 +28,8 @@ export type AppErrorCode = (typeof AppErrorCodes)[keyof typeof AppErrorCodes];
 /** Texto por código. Código sem entrada aqui cai na mensagem do servidor. */
 const MENSAGENS: Record<string, string> = {
   [AppErrorCodes.invalidCredentials]: "E-mail ou senha não conferem.",
+  [AppErrorCodes.authServiceUnavailable]:
+    "Não foi possível acessar o servidor agora. Tente novamente em instantes.",
   [AppErrorCodes.invalidRefresh]: "Sua sessão expirou. Entre novamente.",
   [AppErrorCodes.missingToken]: "Sua sessão expirou. Entre novamente.",
   [AppErrorCodes.invalidValidation]: "Confira os dados informados.",
@@ -39,6 +43,8 @@ const MENSAGENS: Record<string, string> = {
   [AppErrorCodes.rateLimited]: "Muitas tentativas. Espere um pouco.",
   [AppErrorCodes.barcodeAlreadyUsed]: "Esse código de barras já está em uso por outro item.",
   [AppErrorCodes.slotUnavailable]: "Esse horário acabou de ser preenchido. Escolha outro.",
+  [AppErrorCodes.pushNotConfigured]:
+    "As notificações ainda não foram configuradas no servidor.",
 };
 
 /**
@@ -66,11 +72,20 @@ export class ApiError extends Error {
 
   /** Texto para a tela: tradução por código, com a mensagem do servidor de reserva. */
   get texto(): string {
-    const traduzida = this.codigo === null ? undefined : MENSAGENS[this.codigo];
-    if (traduzida) return traduzida;
-    if (this.message) return this.message;
     if (this.status === 0) return "Sem conexão com o servidor.";
-    if (this.status >= 500) return "O servidor não respondeu como esperado.";
+    // Credencial inválida é uma conclusão válida somente para HTTP 401. Isso
+    // evita que um 5xx malformado ou vindo de uma versão antiga do servidor
+    // apareça para a usuária como erro de senha.
+    const codigoAplicavel =
+      this.codigo === AppErrorCodes.invalidCredentials && this.status !== 401
+        ? null
+        : this.codigo;
+    const traduzida = codigoAplicavel === null ? undefined : MENSAGENS[codigoAplicavel];
+    if (traduzida) return traduzida;
+    if (this.status >= 500) {
+      return "Não foi possível acessar o servidor agora. Tente novamente em instantes.";
+    }
+    if (this.message) return this.message;
     return "Não foi possível concluir. Tente de novo.";
   }
 }

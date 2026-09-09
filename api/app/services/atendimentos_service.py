@@ -11,6 +11,7 @@ from app.services.estoque_rendimento import (
     quantidade_fisica_consumida,
     unidade_consumo,
 )
+from app.services import push_service
 
 
 def _ajustar_estoque(supabase: Client, user_id: str, item_id: str, delta: float, permitir_negativo: bool) -> dict | None:
@@ -489,7 +490,7 @@ def _finalizar_legado(
 
     if faltantes:
         for f in faltantes:
-            supabase.table("alertas").insert({
+            alerta = {
                 "user_id": user_id,
                 "tipo": "estoque_negativo",
                 "severidade": "alerta",
@@ -498,7 +499,11 @@ def _finalizar_legado(
                 "referencia_tipo": "estoque_item",
                 "referencia_id": f["item_estoque_id"],
                 "chave_dedupe": f"estoque_negativo:{f['item_estoque_id']}:{atendimento_id}",
-            }).execute()
+            }
+            supabase.table("alertas").insert(alerta).execute()
+            push_service.notificar_alerta_novo(
+                supabase=supabase, user_id=user_id, alerta=alerta
+            )
 
     supabase.table("atendimentos").update({
         "status": "finalizado",

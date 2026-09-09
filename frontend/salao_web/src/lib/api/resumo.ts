@@ -1,9 +1,9 @@
 import { AppApi } from "../http";
-import type { ResumoMensal } from "../types";
+import type { ResumoAnual, ResumoMensal } from "../types";
 import { Paths } from "./paths";
 
 /**
- * `resumo` — 2 operações (§4 do contrato).
+ * `resumo` — consolidações mensal e anual (§4 do contrato).
  *
  * A consolidação inteira vem pronta: histórico de seis meses, insights,
  * comparativo com o mês anterior. **Nada disso é somado no navegador** — é a
@@ -33,6 +33,10 @@ export interface Precificacao {
 export const ResumoApi = {
   mensal(params: { ano: number; mes: number }): Promise<ResumoMensal> {
     return AppApi.get<ResumoMensal>(Paths.resumoMensal, params).then((r) => r.result);
+  },
+
+  anual(params: { ano: number }): Promise<ResumoAnual> {
+    return AppApi.get<ResumoAnual>(Paths.resumoAnual, params).then((r) => r.result);
   },
 
   /** Cálculo puro: não toca no banco. `preco_atual` é query, não corpo. */

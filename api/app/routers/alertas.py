@@ -1,6 +1,7 @@
-"""Router: /alertas e /dispositivos (endpoints-backend.md §9, 7 operações)."""
+"""Router: /alertas e /dispositivos (endpoints-backend.md §9, 8 operações)."""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import StreamingResponse
 from supabase import Client
 
 from app.core.security import usuario_atual
@@ -16,6 +17,7 @@ from app.schemas.alertas import (
     DispositivoOut,
 )
 from app.services import alertas_service as service
+from app.services import realtime_service
 
 router = APIRouter(tags=["Alertas"])
 
@@ -42,6 +44,29 @@ def listar_alertas(
         severidade=severidade,
     )
     return sucesso(resultado.model_dump(), total=len(resultado.alertas))
+
+
+@router.get(
+    "/alertas/eventos",
+    summary="Sinaliza alterações de alertas em tempo real",
+)
+async def eventos_alertas(
+    user_id: str = Depends(usuario_atual),
+):
+    # O polling continua cobrindo o caso sem Redis. Não devolvemos erro para o
+    # app quando o recurso opcional ainda não foi configurado.
+    if not realtime_service.configurado():
+        return Response(status_code=204)
+
+    return StreamingResponse(
+        realtime_service.eventos_alertas(user_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.patch(

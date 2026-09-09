@@ -46,10 +46,12 @@ class TestAlertasEndpoints:
         mock_table.is_.return_value = mock_table
         mock_table.order.return_value = mock_table
 
-        # 1. sincronização do estoque (não há itens neste cenário)
-        # 2. query filtrada de alertas
-        # 3. query de contagem de nao lidos para o resumo/badge
+        # 1. itens de estoque
+        # 2. alertas de estoque abertos usados pela sincronização
+        # 3. query filtrada de alertas
+        # 4. query de contagem de nao lidos para o resumo/badge
         mock_table.execute.side_effect = [
+            MagicMock(data=[]),
             MagicMock(data=[]),
             MagicMock(data=[mock_alerta]),
             MagicMock(data=[{"severidade": "critico"}]),

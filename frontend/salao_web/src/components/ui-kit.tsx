@@ -94,7 +94,7 @@ export function StatCard({
       <p
         className={cn(
           "mt-2 font-display font-semibold tracking-tight",
-          destaque ? "text-3xl sm:text-4xl" : "text-xl sm:text-2xl",
+          destaque ? "text-2xl sm:text-4xl" : "text-xl sm:text-2xl",
           valueTone[tone],
         )}
       >

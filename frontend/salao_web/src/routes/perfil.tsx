@@ -3,7 +3,10 @@ import { ImagePlus, Loader2, LogOut, Target } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
-import { AgendamentoScreen, LinkAgendamentoCard } from "@/components/configuracoes/agendamento-screen";
+import {
+  AgendamentoScreen,
+  LinkAgendamentoCard,
+} from "@/components/configuracoes/agendamento-screen";
 import { CustosFixosScreen } from "@/components/configuracoes/custos-fixos-screen";
 import { ServicosScreen } from "@/components/configuracoes/servicos-screen";
 import { Card, ListSkeleton, SectionTitle, StatCard } from "@/components/ui-kit";
@@ -185,11 +188,11 @@ function PerfilPage() {
       <div className="mt-5 space-y-6">
         <nav
           aria-label="Seções do perfil"
-          className="sticky top-[68px] z-20 -mx-4 overflow-x-auto bg-background/95 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-5 lg:px-5"
+          className="sticky top-[68px] z-20 -mx-4 bg-background/95 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-5 lg:px-5"
         >
           <div
             role="tablist"
-            className="inline-flex h-11 min-w-max items-center rounded-xl bg-muted p-1 text-muted-foreground"
+            className="grid h-auto w-full grid-cols-2 gap-1 rounded-xl bg-muted p-1 text-muted-foreground lg:inline-flex lg:h-11 lg:w-auto lg:min-w-max lg:grid-cols-none"
           >
             {SECOES_PERFIL.map((secao) => (
               <button
@@ -201,7 +204,7 @@ function PerfilPage() {
                 aria-selected={secaoAtiva === secao.id}
                 onClick={() => irParaSecao(secao.id)}
                 className={cn(
-                  "inline-flex h-9 items-center justify-center rounded-lg px-3 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  "inline-flex h-auto min-h-9 items-center justify-center rounded-lg px-2 py-2 text-xs leading-tight font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 lg:h-9 lg:whitespace-nowrap lg:px-3 lg:py-0 lg:text-sm",
                   secaoAtiva === secao.id
                     ? "bg-surface text-foreground shadow"
                     : "hover:bg-surface/60 hover:text-foreground",

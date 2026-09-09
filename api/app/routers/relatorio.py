@@ -5,8 +5,8 @@ Endpoints de consolidação e relatório — a única coisa que mora aqui
 é lógica que o Supabase não consegue fazer sozinho: agregações
 com múltiplas tabelas, regras de negócio e disparo de alertas.
 
-CRUD puro (criar/editar/apagar atendimento, gasto, etc.) fica
-no Supabase REST API — qualquer frontend chama diretamente.
+Todas as operações do app passam pelo FastAPI; o Supabase é apenas a persistência
+interna e nunca é chamado diretamente pelo frontend.
 
 Renomeado de `/relatorio` para `/resumo` (.specs/00-ENTREGA-BACKEND.md § resumo)
 — o path antigo não tem mais consumidor.
@@ -18,8 +18,8 @@ from supabase import Client
 from app.core.supabase_client import get_supabase, rows
 from app.core.security import usuario_atual
 from app.schemas.envelope import ResponseModel, sucesso
-from app.schemas.relatorio import ResumoMensal
-from app.services.relatorio_service import calcular_resumo_mensal
+from app.schemas.relatorio import ResumoAnual, ResumoMensal
+from app.services.relatorio_service import calcular_resumo_anual, calcular_resumo_mensal
 from app.services.webhook_service import notificar_alerta_saldo
 
 router = APIRouter(prefix="/resumo", tags=["Resumo"])
@@ -31,7 +31,7 @@ router = APIRouter(prefix="/resumo", tags=["Resumo"])
 # dela inteira. Esse era o item 🔴 do L0.
 
 
-# ── GET /relatorio/mensal ──────────────────────────────────────────
+# ── GET /resumo/mensal ─────────────────────────────────────────────
 
 @router.get(
     "/mensal",
@@ -39,7 +39,7 @@ router = APIRouter(prefix="/resumo", tags=["Resumo"])
     summary="Resumo financeiro consolidado do mês",
     description=(
         "Agrega atendimentos, insumos, gastos e custos fixos do mês "
-        "em um único payload. Chamado pela tela de Resumo do Flutter. "
+        "em um único payload para a tela de Resumo. "
         "Dispara alerta ao n8n se o saldo ficar no zero a zero."
     ),
 )
@@ -54,6 +54,24 @@ async def resumo_mensal(
     # Dispara alerta ao n8n em background — não bloqueia a resposta
     await notificar_alerta_saldo(user_id, resumo)
 
+    return sucesso(resumo)
+
+
+@router.get(
+    "/anual",
+    response_model=ResponseModel[ResumoAnual],
+    summary="Resumo financeiro consolidado do ano",
+    description=(
+        "Agrega os doze meses do ano pedido e compara faturamento, gastos e lucro "
+        "com o ano anterior."
+    ),
+)
+async def resumo_anual(
+    ano: int = Query(..., ge=2020, le=2100, description="Ano de referência"),
+    user_id: str = Depends(usuario_atual),
+    supabase: Client = Depends(get_supabase),
+):
+    resumo = await calcular_resumo_anual(supabase, user_id, ano)
     return sucesso(resumo)
 
 

@@ -104,7 +104,9 @@ aceita `user_id` no corpo ou na query — se aceitar e confiar, é falha de serv
 }
 ```
 
-Erros: `401` + `AUTH_CREDENCIAIS_INVALIDAS`.
+Erros: `401` + `AUTH_CREDENCIAIS_INVALIDAS`. Se o Supabase Auth estiver
+indisponível ou falhar sem indicar credencial recusada, responde `503` +
+`AUTH_SERVICO_INDISPONIVEL`.
 
 ### `POST /auth/refresh` — `NOVO`
 
@@ -356,7 +358,7 @@ Idempotente: gasto já pago devolve `200` com o estado atual, **não** erro.
 
 ---
 
-## 4. `resumo` — 2 operações
+## 4. `resumo` — 3 operações
 
 ### `GET /resumo/mensal?ano&mes` — `ALTERAR`
 
@@ -398,7 +400,14 @@ Existe como `GET /relatorio/mensal`. Muda de nome (alinha com o módulo do app) 
     "saldo_mes_anterior": 1050.00,
     "servico_mais_lucrativo": { "nome": "Extensão de cílios", "lucro": 290.00 }
   },
-  "alerta_zero_a_zero": false
+  "alerta_zero_a_zero": false,
+  "comparacao": {
+    "periodo_atual": "2026-08",
+    "periodo_anterior": "2026-07",
+    "faturamento": { "atual": 2985.00, "anterior": 2500.00, "variacao_percentual": 19.4 },
+    "gastos": { "atual": 1745.00, "anterior": 1600.00, "variacao_percentual": 9.06 },
+    "lucro": { "atual": 1240.00, "anterior": 900.00, "variacao_percentual": 37.78 }
+  }
 }
 ```
 
@@ -424,6 +433,37 @@ atendimento e diluiria o número que ela usa para decidir preço.
 
 > O model Flutter atual (`RelatorioMensal`, plano) **não** bate com este payload
 > aninhado. Vence este; o model é reescrito na F3.
+
+### `GET /resumo/anual?ano` — `NOVO`
+
+Retorna a consolidação dos doze meses do ano selecionado. O payload mantém os blocos
+`receita`, `gastos` e `insights` do resumo mensal, troca a meta por
+`meta_faturamento_anual` e entrega `historico_doze_meses` para o gráfico anual.
+`comparacao` usa o ano anterior e possui o mesmo formato da comparação mensal:
+
+```json
+{
+  "ano": 2026,
+  "saldo_final": 12400.00,
+  "entrou": 29850.00,
+  "saiu": 17450.00,
+  "meta_faturamento_anual": 108000.00,
+  "historico_doze_meses": [
+    { "ano": 2026, "mes": 1, "receitas": 2100.00, "despesas": 1700.00 }
+  ],
+  "comparacao": {
+    "periodo_atual": "2026",
+    "periodo_anterior": "2025",
+    "faturamento": { "atual": 29850.00, "anterior": 25000.00, "variacao_percentual": 19.4 },
+    "gastos": { "atual": 17450.00, "anterior": 16000.00, "variacao_percentual": 9.06 },
+    "lucro": { "atual": 12400.00, "anterior": 9000.00, "variacao_percentual": 37.78 }
+  }
+}
+```
+
+Quando o período anterior não possui valor, `variacao_percentual` é `null` e a tela
+mostra que ainda não há base para comparação. Isso evita tratar um primeiro movimento
+como crescimento de uma porcentagem arbitrária.
 
 ### `POST /precificacao/calcular` — `EXISTE`
 
@@ -1000,7 +1040,7 @@ preço históricos.
 
 ---
 
-## 9. `alertas` — 7 operações
+## 9. `alertas` — 8 operações
 
 **O cálculo do alerta é do servidor** (S7). O app não varre listas procurando
 `quantidade <= minima`: ele busca alertas prontos. Motivo: a mesma regra tem que valer
@@ -1057,6 +1097,22 @@ calculado no cliente (`EstoqueProvider.totalAlertas`).
 `referencia_tipo` + `referencia_id` é o que permite tocar no alerta e cair na tela
 certa. O app mapeia tipo → rota; o servidor não conhece rotas de UI.
 
+### `GET /alertas/eventos` — `NOVO`
+
+Abre um canal `text/event-stream` autenticado para avisar que os alertas da usuária
+mudaram. O corpo do evento é um sinal curto — a lista completa continua vindo de
+`GET /alertas`, que permanece a fonte da verdade:
+
+```text
+event: alertas
+data: {"tipo":"alteracao"}
+```
+
+O canal usa Pub/Sub do Redis/Upstash somente no servidor. O token do Redis nunca é
+enviado ao navegador. Ao receber o evento, o app invalida as consultas de alertas e
+atualiza badge, banner e central em seguida. Se o Redis não estiver configurado ou
+o canal cair, o app mantém a atualização periódica existente como fallback.
+
 ### `PATCH /alertas/{id}/lido` — `NOVO`
 ### `PATCH /alertas/lidos` — `NOVO`
 
@@ -1106,7 +1162,26 @@ Os canais `whatsapp` e `email` já aparecem no contrato, desligados — ver §10
 { "token": "fcm-token...", "plataforma": "android", "modelo": "Moto G84" }
 ```
 
-`plataforma` ∈ `android` · `ios` · `web`. Idempotente por token.
+Para `plataforma: "web"`, `token` é o `endpoint` da assinatura e o corpo também
+leva as chaves que o navegador devolveu:
+
+```json
+{
+  "token": "https://push.example/...",
+  "plataforma": "web",
+  "modelo": "Chrome no Android",
+  "assinatura_web_push": {
+    "endpoint": "https://push.example/...",
+    "keys": { "p256dh": "...", "auth": "..." }
+  }
+}
+```
+
+`plataforma` ∈ `android` · `ios` · `web`. Idempotente por token. Alertas que
+aparecem na central — inclusive os inseridos por RPC, como o agendamento pelo
+link — são entregues aos endpoints web ativos por Web Push/VAPID. O envio respeita
+`canal_push` e `tipos_silenciados` e é marcado em `alertas.push_enviado_em` para
+não repetir a mesma notificação.
 
 ### `DELETE /dispositivos/{token}` — `NOVO`
 
@@ -1230,6 +1305,7 @@ entrada aqui = mensagem genérica na tela.
 | Código | HTTP | Significado |
 |---|---|---|
 | `AUTH_CREDENCIAIS_INVALIDAS` | 401 | e-mail ou senha incorretos |
+| `AUTH_SERVICO_INDISPONIVEL` | 503 | Supabase Auth indisponível ou falha inesperada ao autenticar |
 | `AUTH_REFRESH_INVALIDO` | 401 | refresh expirado/revogado → logout |
 | `AUTH_TOKEN_AUSENTE` | 401 | requisição sem `Authorization` |
 | `VALIDACAO_INVALIDA` | 422 | corpo malformado; `result` traz os campos |
@@ -1262,10 +1338,10 @@ sem resposta → erro de conexão.
 | `kits` | 6 | — | — | 6 |
 | `perfil` | 10 | — | — | 10 |
 | `servicos` | 4 | — | — | 4 |
-| `alertas` | 7 | — | — | 7 |
+| `alertas` | 8 | — | — | 8 |
 | `agendamento_publico` | 3 | — | — | 3 |
 | n8n / interno | 5 | 3 | — | 2 |
-| **Total** | **59** | **4** | **1** | **54** |
+| **Total** | **60** | **4** | **1** | **55** |
 
 ## 14. Mudanças necessárias no banco
 

@@ -10,13 +10,15 @@ códigos que a RPC pode levantar (`SALAO_NAO_ENCONTRADO`, `SERVICO_INVALIDO`/
 """
 
 import uuid
+from datetime import datetime
 from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from postgrest.exceptions import APIError
 
 from app.main import app
-from app.core.supabase_client import get_supabase_publico
+from app.core.supabase_client import get_supabase, get_supabase_publico
+from app.services import push_service
 from app.services import agendamento_publico_service as service
 
 
@@ -187,6 +189,7 @@ class TestAgendamentoPublicoEndpoints:
             "servicos": [{"servico_id": TEST_SERVICO_ID, "nome": "Extensão", "preco": 180.0}],
         })
         app.dependency_overrides[get_supabase_publico] = lambda: mock_sb
+        app.dependency_overrides[get_supabase] = lambda: MagicMock()
         try:
             response = client.post(
                 f"/v1/agendamento-publico/{TEST_SLUG}/agendar",
@@ -207,6 +210,7 @@ class TestAgendamentoPublicoEndpoints:
         mock_sb = MagicMock()
         _mock_rpc(mock_sb, erro=_api_error("HORARIO_INDISPONIVEL"))
         app.dependency_overrides[get_supabase_publico] = lambda: mock_sb
+        app.dependency_overrides[get_supabase] = lambda: MagicMock()
         try:
             response = client.post(
                 f"/v1/agendamento-publico/{TEST_SLUG}/agendar",
@@ -221,3 +225,37 @@ class TestAgendamentoPublicoEndpoints:
             assert response.json()["codigo"] == "HORARIO_INDISPONIVEL"
         finally:
             app.dependency_overrides.clear()
+
+
+def test_criar_agendamento_notifica_o_salao(monkeypatch):
+    mock_sb = MagicMock()
+    _mock_rpc(mock_sb, retorno={
+        "id": TEST_ATENDIMENTO_ID,
+        "data": "2026-09-10T12:00:00-03:00",
+        "status": "agendado",
+        "servicos": [{"servico_id": TEST_SERVICO_ID, "nome": "Extensão", "preco": 180.0}],
+    })
+    perfil = MagicMock()
+    perfil.select.return_value = perfil
+    perfil.eq.return_value = perfil
+    perfil.limit.return_value = perfil
+    perfil.execute.return_value = MagicMock(data=[{"user_id": "user-1"}])
+    mock_push_sb = MagicMock()
+    mock_push_sb.table.return_value = perfil
+    notificar = MagicMock()
+    monkeypatch.setattr(push_service, "notificar_alerta_novo", notificar)
+
+    resultado = service.criar_agendamento(
+        mock_sb,
+        TEST_SLUG,
+        "Cliente Teste",
+        "551199990000",
+        datetime.fromisoformat("2026-09-10T15:00:00+00:00"),
+        [TEST_SERVICO_ID],
+        supabase_push=mock_push_sb,
+    )
+
+    assert resultado["id"] == TEST_ATENDIMENTO_ID
+    notificar.assert_called_once()
+    assert notificar.call_args.kwargs["user_id"] == "user-1"
+    assert notificar.call_args.kwargs["alerta"]["tipo"] == "agendamento_publico_novo"

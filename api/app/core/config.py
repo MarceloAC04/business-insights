@@ -35,6 +35,27 @@ class Settings(BaseSettings):
         validation_alias="LINK_AGENDAMENTO_BASE_URL",
     )
 
+    # Web Push (VAPID). A chave pública também fica no frontend; a privada
+    # nunca sai da API.
+    web_push_vapid_public_key: str = Field(
+        default="", validation_alias="WEB_PUSH_VAPID_PUBLIC_KEY"
+    )
+    web_push_vapid_private_key: str = Field(
+        default="", validation_alias="WEB_PUSH_VAPID_PRIVATE_KEY"
+    )
+    web_push_vapid_subject: str = Field(
+        default="", validation_alias="WEB_PUSH_VAPID_SUBJECT"
+    )
+
+    # Realtime dos alertas (Upstash Redis via REST). Opcional: sem essas
+    # variáveis o app continua usando o polling de segurança.
+    upstash_redis_rest_url: str = Field(
+        default="", validation_alias="UPSTASH_REDIS_REST_URL"
+    )
+    upstash_redis_rest_token: str = Field(
+        default="", validation_alias="UPSTASH_REDIS_REST_TOKEN"
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]

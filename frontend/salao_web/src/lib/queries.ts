@@ -5,6 +5,7 @@ import {
   type QueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 import {
   AgendamentoPublicoApi,
@@ -32,7 +33,11 @@ import {
   type ServicoBody,
 } from "./api";
 import { ApiError } from "./error-codes";
+import { AppEnvironment } from "./env";
+import type { RegistrarDispositivoBody } from "./api/alertas";
+import { obterAssinaturaWebPush } from "./web-push";
 import type {
+  AlertasPagina,
   CategoriaServico,
   FormaPagamento,
   HorarioDia,
@@ -66,6 +71,7 @@ import type {
 export const chaves = {
   sessao: () => ["sessao"] as const,
   resumo: (ano: number, mes: number) => ["resumo", ano, mes] as const,
+  resumoAnual: (ano: number) => ["resumo", "anual", ano] as const,
   atendimentos: (inicio: string, fim: string, status: StatusAtendimento[]) =>
     ["atendimentos", inicio, fim, status.join(",")] as const,
   atendimento: (id: string) => ["atendimentos", "item", id] as const,
@@ -166,7 +172,22 @@ export function useLogin(): UseMutationResult<Sessao, unknown, { email: string; 
 export function useLogout(): UseMutationResult<void, unknown, void> {
   const cliente = useQueryClient();
   return useMutation({
-    mutationFn: () => AuthApi.logout(),
+    mutationFn: async () => {
+      try {
+        const assinatura = await obterAssinaturaWebPush(false);
+        if (assinatura) {
+          try {
+            await AlertasApi.removerDispositivo(assinatura.endpoint);
+          } catch {
+            // O logout local deve funcionar mesmo se a limpeza remota falhar.
+          }
+          await assinatura.unsubscribe().catch(() => false);
+        }
+      } catch {
+        // Navegador sem Web Push ou assinatura ausente não impede o logout.
+      }
+      await AuthApi.logout();
+    },
     // `onSettled`: a sessão local é limpa mesmo se o servidor recusar — quem
     // clicou em "sair" tem que sair.
     onSettled: () => {
@@ -178,10 +199,25 @@ export function useLogout(): UseMutationResult<void, unknown, void> {
 
 // ── resumo ───────────────────────────────────────────────────────────────────
 
-export function useResumo(ano: number, mes: number) {
+export function useResumo(ano: number, mes: number, enabled = true) {
   return useQuery({
     queryKey: chaves.resumo(ano, mes),
     queryFn: () => ResumoApi.mensal({ ano, mes }),
+    enabled,
+  });
+}
+
+export function useRegistrarDispositivo() {
+  return useMutation({
+    mutationFn: (body: RegistrarDispositivoBody) => AlertasApi.registrarDispositivo(body),
+  });
+}
+
+export function useResumoAnual(ano: number, enabled = true) {
+  return useQuery({
+    queryKey: chaves.resumoAnual(ano),
+    queryFn: () => ResumoApi.anual({ ano }),
+    enabled,
   });
 }
 
@@ -648,14 +684,105 @@ export function useAlertas(apenasNaoLidos = false) {
   return useQuery({
     queryKey: chaves.alertas(apenasNaoLidos),
     queryFn: () => AlertasApi.listar(apenasNaoLidos),
+    // O badge e a central acompanham alertas criados fora da tela atual sem
+    // exigir navegação. A invalidação das mutações continua disparando a busca
+    // imediatamente; o intervalo cobre agendamentos e integrações externas.
+    staleTime: 3_000,
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
   });
+}
+
+/** Mantém todas as telas sincronizadas quando o servidor sinaliza um alerta. */
+export function useAlertasEmTempoReal(): void {
+  const cliente = useQueryClient();
+  const { data: sessao } = useSessao();
+
+  useEffect(() => {
+    if (!sessao?.usuario?.id || AppEnvironment.isDemo) return;
+
+    let encerrado = false;
+    let controlador: AbortController | null = null;
+    let tentativa = 0;
+
+    async function conectar(): Promise<void> {
+      while (!encerrado) {
+        controlador = new AbortController();
+        try {
+          const resposta = await AlertasApi.eventos(controlador.signal);
+          if (resposta.status === 204 || !resposta.body) return;
+
+          tentativa = 0;
+          await cliente.invalidateQueries({ queryKey: ["alertas"] });
+
+          const leitor = resposta.body.getReader();
+          const decodificador = new TextDecoder();
+          let buffer = "";
+
+          while (!encerrado) {
+            const parte = await leitor.read();
+            if (parte.done) break;
+            buffer += decodificador.decode(parte.value, { stream: true });
+
+            let separador = buffer.indexOf("\n\n");
+            while (separador >= 0) {
+              const evento = buffer.slice(0, separador);
+              buffer = buffer.slice(separador + 2);
+              if (evento.includes("event: alertas") && evento.includes("data:")) {
+                await cliente.invalidateQueries({ queryKey: ["alertas"] });
+              }
+              separador = buffer.indexOf("\n\n");
+            }
+          }
+        } catch (erro) {
+          if (encerrado || (erro instanceof Error && erro.name === "AbortError")) return;
+        } finally {
+          controlador = null;
+        }
+
+        if (encerrado) return;
+        const atraso = Math.min(30_000, 1_000 * 2 ** tentativa);
+        tentativa += 1;
+        await new Promise<void>((resolver) => window.setTimeout(resolver, atraso));
+      }
+    }
+
+    void conectar();
+    return () => {
+      encerrado = true;
+      controlador?.abort();
+    };
+  }, [cliente, sessao?.usuario?.id]);
 }
 
 export function useMarcarAlertaLido() {
   const cliente = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => AlertasApi.marcarLido(id),
-    onSuccess: () => invalidar(cliente, ["alertas"]),
+    onMutate: async (id) => {
+      await cliente.cancelQueries({ queryKey: ["alertas"] });
+      const anteriores = cliente.getQueriesData<AlertasPagina>({ queryKey: ["alertas"] });
+      cliente.setQueriesData<AlertasPagina>({ queryKey: ["alertas"] }, (atual) => {
+        if (!atual) return atual;
+        const alerta = atual.alertas.find((item) => item.id === id);
+        if (!alerta || alerta.lido_em !== null) return atual;
+        const resumo = { ...atual.resumo };
+        resumo[alerta.severidade] = Math.max(0, (resumo[alerta.severidade] ?? 0) - 1);
+        return {
+          ...atual,
+          total_nao_lidos: Math.max(0, atual.total_nao_lidos - 1),
+          resumo,
+          alertas: atual.alertas.map((item) =>
+            item.id === id ? { ...item, lido_em: new Date().toISOString() } : item,
+          ),
+        };
+      });
+      return { anteriores };
+    },
+    onError: (_erro, _id, contexto) => {
+      contexto?.anteriores.forEach(([queryKey, dados]) => cliente.setQueryData(queryKey, dados));
+    },
+    onSettled: () => invalidar(cliente, ["alertas"]),
   });
 }
 
@@ -663,6 +790,25 @@ export function useMarcarTodosAlertasLidos() {
   const cliente = useQueryClient();
   return useMutation({
     mutationFn: () => AlertasApi.marcarTodosLidos(),
-    onSuccess: () => invalidar(cliente, ["alertas"]),
+    onMutate: async () => {
+      await cliente.cancelQueries({ queryKey: ["alertas"] });
+      const anteriores = cliente.getQueriesData<AlertasPagina>({ queryKey: ["alertas"] });
+      cliente.setQueriesData<AlertasPagina>({ queryKey: ["alertas"] }, (atual) => {
+        if (!atual) return atual;
+        return {
+          ...atual,
+          total_nao_lidos: 0,
+          resumo: { critico: 0, alerta: 0, info: 0 },
+          alertas: atual.alertas.map((item) =>
+            item.lido_em === null ? { ...item, lido_em: new Date().toISOString() } : item,
+          ),
+        };
+      });
+      return { anteriores };
+    },
+    onError: (_erro, _dados, contexto) => {
+      contexto?.anteriores.forEach(([queryKey, dados]) => cliente.setQueryData(queryKey, dados));
+    },
+    onSettled: () => invalidar(cliente, ["alertas"]),
   });
 }

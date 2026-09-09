@@ -13,8 +13,11 @@ Isso evita duplicar uma tabela de refresh tokens e uma lógica de expiração
 que o Supabase já resolve.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from supabase import Client
+from supabase_auth.errors import AuthApiError, AuthInvalidCredentialsError
 
 from app.core.supabase_client import get_supabase, get_supabase_auth, row, rows
 from app.core.security import usuario_atual, token_atual
@@ -29,6 +32,55 @@ from app.schemas.auth import (
 from app.schemas.envelope import sucesso, ResponseModel
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+logger = logging.getLogger(__name__)
+
+_CODIGO_CREDENCIAIS_INVALIDAS = "AUTH_CREDENCIAIS_INVALIDAS"
+_CODIGO_SERVICO_INDISPONIVEL = "AUTH_SERVICO_INDISPONIVEL"
+
+
+def _e_erro_de_credencial(erro: Exception) -> bool:
+    """Reconhece somente a resposta de credencial recusada pelo Auth."""
+    if isinstance(erro, AuthInvalidCredentialsError):
+        return True
+
+    if not isinstance(erro, AuthApiError):
+        return False
+
+    if str(erro.code or "").lower() == "invalid_credentials":
+        return True
+
+    # Compatibilidade com versões do Supabase que não enviavam `code`.
+    mensagem = str(erro).strip().lower()
+    return erro.status in (400, 401) and mensagem in {
+        "invalid login credentials",
+        "invalid login",
+    }
+
+
+def _erro_do_login(erro: Exception) -> HTTPException:
+    if _e_erro_de_credencial(erro):
+        return HTTPException(
+            status_code=401,
+            detail={
+                "codigo": _CODIGO_CREDENCIAIS_INVALIDAS,
+                "mensagem": "E-mail ou senha incorretos",
+            },
+        )
+
+    # Não expõe a mensagem do provedor nem transforma indisponibilidade em
+    # erro de senha. O tipo/status ficam no log para diagnóstico local.
+    logger.warning(
+        "Falha no provedor de autenticação durante login: tipo=%s status=%s",
+        type(erro).__name__,
+        getattr(erro, "status", None),
+    )
+    return HTTPException(
+        status_code=503,
+        detail={
+            "codigo": _CODIGO_SERVICO_INDISPONIVEL,
+            "mensagem": "O serviço de login está indisponível no momento",
+        },
+    )
 
 
 def _buscar_salao(supabase: Client, user_id: str) -> tuple[SalaoOut, str]:
@@ -101,13 +153,19 @@ def login(
         auth_response = supabase_auth.auth.sign_in_with_password(
             {"email": dados.email, "password": dados.senha}
         )
-    except Exception:
-        raise HTTPException(
-            status_code=401,
-            detail={"codigo": "AUTH_CREDENCIAIS_INVALIDAS", "mensagem": "E-mail ou senha incorretos"},
-        )
+    except Exception as erro:
+        raise _erro_do_login(erro) from erro
 
-    sessao = _montar_sessao(supabase, auth_response)
+    try:
+        sessao = _montar_sessao(supabase, auth_response)
+    except HTTPException:
+        raise
+    except Exception as erro:
+        logger.warning(
+            "Falha ao carregar os dados do salão após login: tipo=%s",
+            type(erro).__name__,
+        )
+        raise _erro_do_login(erro) from erro
     return sucesso(sessao.model_dump())
 
 

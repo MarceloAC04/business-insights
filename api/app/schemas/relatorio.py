@@ -55,6 +55,23 @@ class ServicoMaisLucrativo(BaseModel):
     lucro: float
 
 
+class ValorComparado(BaseModel):
+    atual: float
+    anterior: float
+    variacao_percentual: Optional[float] = Field(
+        default=None,
+        description="Variação percentual em relação ao período anterior; nula sem base de comparação",
+    )
+
+
+class ResumoComparacao(BaseModel):
+    periodo_atual: str
+    periodo_anterior: str
+    faturamento: ValorComparado
+    gastos: ValorComparado
+    lucro: ValorComparado
+
+
 class ResumoInsights(BaseModel):
     ticket_medio: float = Field(description="total_servicos / quantidade_atendimentos (kit não entra)")
     margem_lucro_percentual: float = Field(description="(saldo_final / entrou) × 100")
@@ -76,8 +93,35 @@ class ResumoMensal(BaseModel):
     receita: ResumoReceita
     gastos: ResumoGastos
     insights: ResumoInsights
+    comparacao: ResumoComparacao
     alerta_zero_a_zero: bool = Field(
         description="entrou > 0 e 0 <= saldo_final < limite_saldo_alerta da usuária"
+    )
+
+
+class ResumoInsightsAnual(BaseModel):
+    ticket_medio: float = Field(description="total_servicos / quantidade_atendimentos (kit não entra)")
+    margem_lucro_percentual: float = Field(description="(saldo_final / entrou) × 100")
+    variacao_percentual_ano_anterior: float
+    saldo_ano_anterior: float
+    servico_mais_lucrativo: Optional[ServicoMaisLucrativo] = None
+
+
+class ResumoAnual(BaseModel):
+    ano: int
+    saldo_final: float = Field(description="entrou - saiu no ano")
+    entrou: float = Field(description="total_servicos + total_kits no ano")
+    saiu: float = Field(description="total_custos_fixos + total_gastos_variaveis no ano")
+    meta_faturamento_anual: float
+    historico_doze_meses: list[PontoHistorico] = Field(
+        description="Doze pontos cronológicos do ano, inclusive meses zerados"
+    )
+    receita: ResumoReceita
+    gastos: ResumoGastos
+    insights: ResumoInsightsAnual
+    comparacao: ResumoComparacao
+    alerta_zero_a_zero: bool = Field(
+        description="entrou > 0 e 0 <= saldo_final < limite_saldo_alerta anual da usuária"
     )
 
 

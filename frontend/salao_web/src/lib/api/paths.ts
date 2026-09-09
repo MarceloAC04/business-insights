@@ -29,6 +29,7 @@ export const Paths = {
 
   // resumo
   resumoMensal: "/resumo/mensal",
+  resumoAnual: "/resumo/anual",
   precificacao: "/precificacao/calcular",
 
   // estoque
@@ -64,6 +65,7 @@ export const Paths = {
 
   // alertas
   alertas: "/alertas",
+  eventosAlertas: "/alertas/eventos",
   lerAlerta: (id: string) => `/alertas/${id}/lido`,
   lerTodosAlertas: "/alertas/lidos",
   preferenciasAlerta: "/alertas/preferencias",

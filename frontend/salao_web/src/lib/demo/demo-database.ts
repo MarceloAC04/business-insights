@@ -26,6 +26,7 @@ import type {
   PontoHistorico,
   PreferenciasAlerta,
   ProdutoPadrao,
+  ResumoAnual,
   ResumoMensal,
   Servico,
   ServicoRealizado,
@@ -1339,6 +1340,93 @@ export class DemoDatabase {
     return this.envelope(this.resumo(ano, mes, true));
   }
 
+  getResumoAnual(ano: number): Envelope<ResumoAnual> {
+    const meses = Array.from({ length: 12 }, (_, indice) => this.resumo(ano, indice + 1, false));
+    const anteriores = Array.from({ length: 12 }, (_, indice) => this.resumo(ano - 1, indice + 1, false));
+    const somar = (periodos: ResumoMensal[]) => ({
+      entrou: periodos.reduce((soma, periodo) => soma + periodo.entrou, 0),
+      saiu: periodos.reduce((soma, periodo) => soma + periodo.saiu, 0),
+      total_servicos: periodos.reduce((soma, periodo) => soma + periodo.receita.total_servicos, 0),
+      total_insumos: periodos.reduce((soma, periodo) => soma + periodo.receita.total_insumos, 0),
+      quantidade_atendimentos: periodos.reduce(
+        (soma, periodo) => soma + periodo.receita.quantidade_atendimentos,
+        0,
+      ),
+      total_kits: periodos.reduce((soma, periodo) => soma + periodo.receita.total_kits, 0),
+      quantidade_kits: periodos.reduce(
+        (soma, periodo) => soma + periodo.receita.quantidade_kits_vendidos,
+        0,
+      ),
+      custo_kits: periodos.reduce((soma, periodo) => soma + periodo.receita.custo_kits_vendidos, 0),
+      custos_fixos: periodos.reduce((soma, periodo) => soma + periodo.gastos.total_custos_fixos, 0),
+      variaveis: periodos.reduce((soma, periodo) => soma + periodo.gastos.total_gastos_variaveis, 0),
+    });
+    const atual = somar(meses);
+    const anterior = somar(anteriores);
+    const saldoAtual = atual.entrou - atual.saiu;
+    const saldoAnterior = anterior.entrou - anterior.saiu;
+    const variacao = (valorAtual: number, valorAnterior: number) =>
+      valorAnterior === 0 ? null : ((valorAtual - valorAnterior) / Math.abs(valorAnterior)) * 100;
+    const ranking = new Map<string, ServicoRealizado>();
+    meses.forEach((periodo) =>
+      periodo.receita.servicos_mais_realizados.forEach((servico) => {
+        const linha = ranking.get(servico.nome) ?? { ...servico, quantidade: 0, total_receita: 0, lucro: 0 };
+        linha.quantidade += servico.quantidade;
+        linha.total_receita += servico.total_receita;
+        linha.lucro += servico.lucro;
+        ranking.set(servico.nome, linha);
+      }),
+    );
+    const servicos = [...ranking.values()].sort((a, b) => b.total_receita - a.total_receita);
+    const primeiro = servicos[0];
+
+    return this.envelope({
+      ano,
+      saldo_final: saldoAtual,
+      entrou: atual.entrou,
+      saiu: atual.saiu,
+      meta_faturamento_anual: this.perfil.meta_faturamento_mensal * 12,
+      historico_doze_meses: meses.map((periodo, indice) => ({
+        ano,
+        mes: indice + 1,
+        receitas: periodo.entrou,
+        despesas: periodo.saiu,
+      })),
+      receita: {
+        total_servicos: atual.total_servicos,
+        total_insumos: atual.total_insumos,
+        liquido_atendimentos: atual.total_servicos - atual.total_insumos,
+        quantidade_atendimentos: atual.quantidade_atendimentos,
+        total_kits: atual.total_kits,
+        quantidade_kits_vendidos: atual.quantidade_kits,
+        custo_kits_vendidos: atual.custo_kits,
+        servicos_mais_realizados: servicos.slice(0, 5),
+      },
+      gastos: {
+        total_custos_fixos: atual.custos_fixos,
+        total_gastos_variaveis: atual.variaveis,
+        total_saiu: atual.saiu,
+      },
+      insights: {
+        ticket_medio: atual.quantidade_atendimentos === 0 ? 0 : atual.total_servicos / atual.quantidade_atendimentos,
+        margem_lucro_percentual: atual.entrou === 0 ? 0 : (saldoAtual / atual.entrou) * 100,
+        variacao_percentual_ano_anterior:
+          saldoAnterior === 0 ? 0 : ((saldoAtual - saldoAnterior) / Math.abs(saldoAnterior)) * 100,
+        saldo_ano_anterior: saldoAnterior,
+        servico_mais_lucrativo: primeiro ? { nome: primeiro.nome, lucro: primeiro.lucro } : null,
+      },
+      comparacao: {
+        periodo_atual: String(ano),
+        periodo_anterior: String(ano - 1),
+        faturamento: { atual: atual.entrou, anterior: anterior.entrou, variacao_percentual: variacao(atual.entrou, anterior.entrou) },
+        gastos: { atual: atual.saiu, anterior: anterior.saiu, variacao_percentual: variacao(atual.saiu, anterior.saiu) },
+        lucro: { atual: saldoAtual, anterior: saldoAnterior, variacao_percentual: variacao(saldoAtual, saldoAnterior) },
+      },
+      alerta_zero_a_zero:
+        atual.entrou > 0 && saldoAtual >= 0 && saldoAtual < this.preferencias.limite_saldo_alerta * 12,
+    });
+  }
+
   private saldoDoMes(ano: number, mes: number): number {
     return this.resumo(ano, mes, false).saldo_final;
   }
@@ -1393,9 +1481,10 @@ export class DemoDatabase {
     const saiu = totalCustosFixos + totalVariaveis;
     const saldoFinal = entrou - saiu;
 
-    const anterior = comparar
-      ? this.saldoDoMes(mes === 1 ? ano - 1 : ano, mes === 1 ? 12 : mes - 1)
-      : 0;
+    const anoAnterior = mes === 1 ? ano - 1 : ano;
+    const mesAnterior = mes === 1 ? 12 : mes - 1;
+    const resumoAnterior = comparar ? this.resumo(anoAnterior, mesAnterior, false) : null;
+    const anterior = resumoAnterior?.saldo_final ?? 0;
 
     const historico: PontoHistorico[] = comparar
       ? Array.from({ length: 6 }, (_, index) => {
@@ -1411,6 +1500,8 @@ export class DemoDatabase {
       : [];
 
     const primeiro = maisRealizados[0];
+    const variacao = (atual: number, base: number) =>
+      base === 0 ? null : ((atual - base) / Math.abs(base)) * 100;
 
     return {
       ano,
@@ -1443,8 +1534,23 @@ export class DemoDatabase {
           anterior === 0 ? 0 : ((saldoFinal - anterior) / Math.abs(anterior)) * 100,
         saldo_mes_anterior: anterior,
         servico_mais_lucrativo: primeiro
-          ? { nome: primeiro.nome, lucro: primeiro.total_receita }
+          ? { nome: primeiro.nome, lucro: primeiro.lucro }
           : null,
+      },
+      comparacao: {
+        periodo_atual: `${ano}-${String(mes).padStart(2, "0")}`,
+        periodo_anterior: `${anoAnterior}-${String(mesAnterior).padStart(2, "0")}`,
+        faturamento: {
+          atual: entrou,
+          anterior: resumoAnterior?.entrou ?? 0,
+          variacao_percentual: variacao(entrou, resumoAnterior?.entrou ?? 0),
+        },
+        gastos: {
+          atual: saiu,
+          anterior: resumoAnterior?.saiu ?? 0,
+          variacao_percentual: variacao(saiu, resumoAnterior?.saiu ?? 0),
+        },
+        lucro: { atual: saldoFinal, anterior, variacao_percentual: variacao(saldoFinal, anterior) },
       },
       // Trabalhou o mês e sobrou quase nada: o "zero a zero" do protótipo.
       alerta_zero_a_zero:

@@ -396,9 +396,9 @@ Quando a condição deixa de valer, marque `resolvido_em` em vez de apagar.
 
 Respeite `tipos_silenciados` e os canais das preferências.
 
-### L6.2 · Endpoints (7)
+### L6.2 · Endpoints (8)
 
-`GET /alertas` · `PATCH /alertas/{id}/lido` · `PATCH /alertas/lidos` ·
+`GET /alertas` · `GET /alertas/eventos` · `PATCH /alertas/{id}/lido` · `PATCH /alertas/lidos` ·
 `GET · PUT /alertas/preferencias` · `POST /dispositivos` · `DELETE /dispositivos/{token}`
 
 `GET /alertas` devolve `total_nao_lidos` e `resumo: { critico, alerta, info }` —
@@ -407,11 +407,18 @@ Respeite `tipos_silenciados` e os canais das preferências.
 `POST /dispositivos` é idempotente por token. `DELETE` no logout, senão a próxima pessoa
 que usar o aparelho recebe alertas alheios.
 
-### L6.3 · Push `depende do Firebase`
+`GET /alertas/eventos` mantém um canal SSE autenticado para sinalizar alterações
+criadas pelo app ou pelo link público. O navegador recarrega `GET /alertas` ao receber
+o evento; se o Redis/Upstash estiver indisponível, o polling periódico continua como
+fallback sem impedir o uso da central.
 
-Bloqueado até existir projeto Firebase com FCM (só o dono da conta cria). Quando existir:
-`google-services.json` / `GoogleService-Info.plist` no app e envio via FCM no servidor,
-para os tokens ativos de `dispositivos`, respeitando `canal_push`.
+### L6.3 · Push Web Push/VAPID
+
+O frontend web registra uma assinatura do navegador em `dispositivos` e o FastAPI
+envia por Web Push padrão todo alerta que aparece na central, inclusive os
+inseridos por RPC como o agendamento pelo link, usando as chaves VAPID do ambiente.
+`alertas.push_enviado_em` evita duplicação; a assinatura é removida no logout e
+endpoints expirados são desativados sem desfazer o alerta já gravado.
 
 **Aceite do lote:** deixar um item negativo faz o badge subir e o alerta aparecer na
 central; marcar lido zera o badge.
