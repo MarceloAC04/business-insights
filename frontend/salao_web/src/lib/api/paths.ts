@@ -45,6 +45,7 @@ export const Paths = {
 
   // perfil
   perfil: "/perfil",
+  fotoPerfil: "/perfil/foto",
   custosFixos: "/perfil/custos-fixos",
   custoFixo: (id: string) => `/perfil/custos-fixos/${id}`,
   pagarCustoFixo: (id: string) => `/perfil/custos-fixos/${id}/pagar`,
@@ -54,6 +55,7 @@ export const Paths = {
   // servicos
   servicos: "/servicos",
   servico: (id: string) => `/servicos/${id}`,
+  categoriasServico: "/servicos/categorias",
 
   // agendamento público (sem login — link fixo do salão)
   agendamentoPublico: (slug: string) => `/agendamento-publico/${slug}`,

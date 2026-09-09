@@ -133,6 +133,45 @@ class TestAuthEndpoints:
         finally:
             app.dependency_overrides.clear()
 
+    def test_login_usa_nome_do_perfil_quando_metadata_nao_tem_nome(self, client):
+        """O e-mail é credencial e não deve virar a saudação do resumo."""
+        mock_auth_resp = MagicMock()
+        mock_auth_resp.session.access_token = "mock-access-token"
+        mock_auth_resp.session.refresh_token = "mock-refresh-token"
+        mock_auth_resp.session.expires_in = 3600
+        mock_auth_resp.user.id = TEST_USER_ID
+        mock_auth_resp.user.email = "teste@salao.app"
+        mock_auth_resp.user.user_metadata = {}
+
+        mock_sb_auth = MagicMock()
+        mock_sb_auth.auth.sign_in_with_password.return_value = mock_auth_resp
+
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.single.return_value = mock_table
+        mock_table.execute.return_value.data = {
+            "id": TEST_SALAO_ID,
+            "nome_salao": "Thamires Beauty",
+            "nome_proprietaria": "Thamires Borges",
+            "foto_url": None,
+        }
+        mock_sb.table.return_value = mock_table
+
+        app.dependency_overrides[get_supabase_auth] = lambda: mock_sb_auth
+        app.dependency_overrides[get_supabase] = lambda: mock_sb
+
+        try:
+            response = client.post(
+                "/v1/auth/login",
+                json={"email": "teste@salao.app", "senha": "password123"},
+            )
+            assert response.status_code == 200
+            assert response.json()["result"]["usuario"]["nome"] == "Thamires Borges"
+        finally:
+            app.dependency_overrides.clear()
+
     def test_refresh_token_success(self, client):
         mock_auth_resp = MagicMock()
         mock_auth_resp.session.access_token = "new-access-token"

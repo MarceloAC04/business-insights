@@ -19,6 +19,7 @@ import {
   ServicosApi,
   type AgendarBody,
   type AtendimentoBody,
+  type CategoriaServicoBody,
   type CustoFixoBody,
   type FinalizarBody,
   type GastoBody,
@@ -31,7 +32,16 @@ import {
   type ServicoBody,
 } from "./api";
 import { ApiError } from "./error-codes";
-import type { FormaPagamento, HorarioDia, Salao, StatusAtendimento, Usuario } from "./types";
+import type {
+  CategoriaServico,
+  FormaPagamento,
+  HorarioDia,
+  Perfil,
+  Salao,
+  Servico,
+  StatusAtendimento,
+  Usuario,
+} from "./types";
 
 /**
  * A camada de dados vista pela tela.
@@ -66,6 +76,7 @@ export const chaves = {
   perfil: () => ["perfil"] as const,
   custosFixos: (competencia?: string) => ["custos-fixos", competencia ?? "corrente"] as const,
   servicos: () => ["servicos"] as const,
+  categoriasServico: () => ["categorias-servico"] as const,
   alertas: (apenasNaoLidos: boolean) => ["alertas", apenasNaoLidos] as const,
   preferenciasAlerta: () => ["preferencias-alerta"] as const,
   horarioFuncionamento: () => ["horario-funcionamento"] as const,
@@ -85,6 +96,7 @@ type Grupo =
   | "perfil"
   | "custos-fixos"
   | "servicos"
+  | "categorias-servico"
   | "alertas"
   | "horario-funcionamento"
   | "link-agendamento";
@@ -444,6 +456,21 @@ export function useSalvarPerfil() {
   });
 }
 
+export function useEnviarFotoPerfil() {
+  const cliente = useQueryClient();
+  return useMutation({
+    mutationFn: (arquivo: File) => PerfilApi.enviarFoto(arquivo),
+    onSuccess: (foto) => {
+      cliente.setQueryData<{ salao: Perfil }>(chaves.perfil(), (atual) =>
+        atual ? { salao: { ...atual.salao, foto_url: foto.foto_url } } : atual,
+      );
+      cliente.setQueryData<Sessao>(chaves.sessao(), (atual) =>
+        atual?.salao ? { ...atual, salao: { ...atual.salao, foto_url: foto.foto_url } } : atual,
+      );
+    },
+  });
+}
+
 /** `competencia` no formato `AAAA-MM`; ausente vale o mês corrente. */
 export function useCustosFixos(competencia?: string) {
   return useQuery({
@@ -494,11 +521,32 @@ export function useServicos() {
   });
 }
 
+export function useCategoriasServico() {
+  return useQuery({
+    queryKey: chaves.categoriasServico(),
+    queryFn: () => ServicosApi.listarCategorias(),
+  });
+}
+
+function atualizarServicoNoCache(cliente: QueryClient, servico: Servico): void {
+  cliente.setQueryData<{ servicos: Servico[] }>(chaves.servicos(), (atual) => {
+    if (!atual) return atual;
+    const existe = atual.servicos.some((item) => item.id === servico.id);
+    const servicos = existe
+      ? atual.servicos.map((item) => (item.id === servico.id ? servico : item))
+      : [...atual.servicos, servico];
+    return { servicos: servicos.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")) };
+  });
+}
+
 export function useCriarServico() {
   const cliente = useQueryClient();
   return useMutation({
     mutationFn: (body: ServicoBody) => ServicosApi.criar(body),
-    onSuccess: () => invalidar(cliente, ["servicos", ...SEMPRE]),
+    onSuccess: (servico) => {
+      atualizarServicoNoCache(cliente, servico);
+      invalidar(cliente, ["servicos", ...SEMPRE]);
+    },
   });
 }
 
@@ -508,7 +556,10 @@ export function useEditarServico() {
     mutationFn: ({ id, body }: { id: string; body: Partial<ServicoBody> }) =>
       ServicosApi.editar(id, body),
     // Mudar o preço não reescreve atendimento passado: lá ele está congelado.
-    onSuccess: () => invalidar(cliente, ["servicos", ...SEMPRE]),
+    onSuccess: (servico) => {
+      atualizarServicoNoCache(cliente, servico);
+      invalidar(cliente, ["servicos", ...SEMPRE]);
+    },
   });
 }
 
@@ -516,7 +567,31 @@ export function useExcluirServico() {
   const cliente = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => ServicosApi.excluir(id),
-    onSuccess: () => invalidar(cliente, ["servicos", ...SEMPRE]),
+    onSuccess: (_, id) => {
+      cliente.setQueryData<{ servicos: Servico[] }>(chaves.servicos(), (atual) =>
+        atual ? { servicos: atual.servicos.filter((servico) => servico.id !== id) } : atual,
+      );
+      invalidar(cliente, ["servicos", ...SEMPRE]);
+    },
+  });
+}
+
+export function useCriarCategoriaServico() {
+  const cliente = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CategoriaServicoBody) => ServicosApi.criarCategoria(body),
+    onSuccess: (categoria) => {
+      cliente.setQueryData<{ categorias: CategoriaServico[] }>(
+        chaves.categoriasServico(),
+        (atual) => {
+          const categorias = [...(atual?.categorias ?? []), categoria].sort((a, b) =>
+            a.nome.localeCompare(b.nome, "pt-BR"),
+          );
+          return { categorias };
+        },
+      );
+      invalidar(cliente, ["categorias-servico"]);
+    },
   });
 }
 

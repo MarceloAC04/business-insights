@@ -48,14 +48,23 @@ class TestAgendamentoPublicoServiceRpc:
     def test_obter_pagina_chama_rpc_com_slug(self):
         mock_sb = MagicMock()
         _mock_rpc(mock_sb, retorno={
-            "salao": {"nome": "Thamires Beauty", "foto_url": None},
-            "servicos": [{"id": TEST_SERVICO_ID, "nome": "Extensão", "preco": 180.0, "duracao_minutos": 90}],
+            "salao": {
+                "nome": "Thamires Beauty",
+                "foto_url": None,
+                "telefone_whatsapp": "551199990000",
+                "instagram_url": "@thamiresbeauty",
+                "endereco": "São Paulo, SP",
+                "descricao_publica": "Especialista em cílios",
+                "horarios": [{"dia_semana": 2, "ativo": True, "hora_inicio": "08:00", "hora_fim": "12:00", "hora_inicio_2": "13:00", "hora_fim_2": "18:00"}],
+            },
+            "servicos": [{"id": TEST_SERVICO_ID, "nome": "Extensão", "categoria": "Cílios", "preco": 180.0, "duracao_minutos": 90}],
         })
 
         resultado = service.obter_pagina(mock_sb, TEST_SLUG)
 
         mock_sb.rpc.assert_called_once_with("agendamento_publico_pagina", {"p_slug": TEST_SLUG})
         assert resultado["salao"]["nome"] == "Thamires Beauty"
+        assert resultado["servicos"][0]["categoria"] == "Cílios"
         assert resultado["servicos"][0]["id"] == TEST_SERVICO_ID
 
     def test_obter_pagina_traduz_salao_nao_encontrado(self):
@@ -136,8 +145,16 @@ class TestAgendamentoPublicoEndpoints:
     def test_obter_pagina_endpoint(self, client):
         mock_sb = MagicMock()
         _mock_rpc(mock_sb, retorno={
-            "salao": {"nome": "Thamires Beauty", "foto_url": None},
-            "servicos": [{"id": TEST_SERVICO_ID, "nome": "Extensão", "preco": 180.0, "duracao_minutos": 90}],
+            "salao": {
+                "nome": "Thamires Beauty",
+                "foto_url": None,
+                "telefone_whatsapp": "551199990000",
+                "instagram_url": "@thamiresbeauty",
+                "endereco": "São Paulo, SP",
+                "descricao_publica": "Especialista em cílios",
+                "horarios": [{"dia_semana": 2, "ativo": True, "hora_inicio": "08:00", "hora_fim": "12:00", "hora_inicio_2": "13:00", "hora_fim_2": "18:00"}],
+            },
+            "servicos": [{"id": TEST_SERVICO_ID, "nome": "Extensão", "categoria": "Cílios", "preco": 180.0, "duracao_minutos": 90}],
         })
         app.dependency_overrides[get_supabase_publico] = lambda: mock_sb
         try:
@@ -145,6 +162,8 @@ class TestAgendamentoPublicoEndpoints:
             assert response.status_code == 200
             data = response.json()
             assert data["result"]["salao"]["nome"] == "Thamires Beauty"
+            assert data["result"]["salao"]["horarios"][0]["hora_inicio_2"] == "13:00"
+            assert data["result"]["servicos"][0]["categoria"] == "Cílios"
         finally:
             app.dependency_overrides.clear()
 

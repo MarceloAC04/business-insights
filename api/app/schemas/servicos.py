@@ -1,6 +1,6 @@
 """Schemas de `servicos` (endpoints-backend.md §8)."""
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ProdutoPadraoIn(BaseModel):
@@ -17,6 +17,7 @@ class ProdutoPadraoIn(BaseModel):
 
 class ServicoIn(BaseModel):
     nome: str
+    categoria: str = Field(default="Outros", max_length=60)
     preco: float
     duracao_minutos: int
     produtos_padrao: list[ProdutoPadraoIn] = []
@@ -30,9 +31,18 @@ class ServicoIn(BaseModel):
             raise ValueError("item_estoque_id repetido em produtos_padrao")
         return self
 
+    @field_validator("categoria")
+    @classmethod
+    def _validar_categoria(cls, valor: str) -> str:
+        categoria = valor.strip()
+        if not categoria:
+            raise ValueError("categoria não pode ficar vazia")
+        return categoria
+
 
 class ServicoPatchIn(BaseModel):
     nome: str | None = None
+    categoria: str | None = Field(default=None, max_length=60)
     preco: float | None = None
     duracao_minutos: int | None = None
     produtos_padrao: list[ProdutoPadraoIn] | None = None
@@ -46,6 +56,37 @@ class ServicoPatchIn(BaseModel):
             if len(ids) != len(set(ids)):
                 raise ValueError("item_estoque_id repetido em produtos_padrao")
         return self
+
+    @field_validator("categoria")
+    @classmethod
+    def _validar_categoria(cls, valor: str | None) -> str | None:
+        if valor is None:
+            return None
+        categoria = valor.strip()
+        if not categoria:
+            raise ValueError("categoria não pode ficar vazia")
+        return categoria
+
+
+class CategoriaServicoIn(BaseModel):
+    nome: str = Field(min_length=1, max_length=60)
+
+    @field_validator("nome")
+    @classmethod
+    def _validar_nome(cls, valor: str) -> str:
+        nome = valor.strip()
+        if not nome:
+            raise ValueError("nome não pode ficar vazio")
+        return nome
+
+
+class CategoriaServicoOut(BaseModel):
+    id: str
+    nome: str
+
+
+class CategoriasServicoListaOut(BaseModel):
+    categorias: list[CategoriaServicoOut]
 
 
 class ProdutoPadraoOut(BaseModel):
@@ -62,6 +103,7 @@ class ProdutoPadraoOut(BaseModel):
 class ServicoOut(BaseModel):
     id: str
     nome: str
+    categoria: str
     preco: float
     duracao_minutos: int | None
     ativo: bool

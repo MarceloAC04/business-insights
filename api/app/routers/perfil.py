@@ -2,7 +2,7 @@
 Router: /perfil (endpoints-backend.md §7, 7 operações + expediente e link).
 """
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from supabase import Client
 
 from app.core.config import get_settings
@@ -12,6 +12,7 @@ from app.schemas.envelope import ResponseModel, sucesso
 from app.schemas.perfil import (
     PerfilOut,
     PerfilUpdateIn,
+    FotoPerfilOut,
     CustoFixoIn,
     CustoFixoPatchIn,
     CustoFixoPagarIn,
@@ -53,6 +54,22 @@ def atualizar_perfil(
     supabase: Client = Depends(get_supabase),
 ):
     resultado = service.atualizar_perfil(supabase=supabase, user_id=user_id, dados=dados)
+    return sucesso(resultado.model_dump())
+
+
+@router.post(
+    "/foto",
+    response_model=ResponseModel[FotoPerfilOut],
+    summary="Envia a foto ou logo público do salão",
+)
+def enviar_foto(
+    arquivo: UploadFile = File(...),
+    user_id: str = Depends(usuario_atual),
+    supabase: Client = Depends(get_supabase),
+):
+    # Lê no máximo 5 MB + 1 byte; a validação e o upload ficam no serviço.
+    conteudo = arquivo.file.read(5 * 1024 * 1024 + 1)
+    resultado = service.enviar_foto(supabase, user_id, conteudo, arquivo.content_type)
     return sucesso(resultado.model_dump())
 
 
@@ -143,7 +160,7 @@ def obter_horario_funcionamento(
 ):
     resp = (
         supabase.table("horario_funcionamento")
-        .select("dia_semana, ativo, hora_inicio, hora_fim")
+        .select("dia_semana, ativo, hora_inicio, hora_fim, hora_inicio_2, hora_fim_2")
         .eq("user_id", user_id)
         .order("dia_semana")
         .execute()
@@ -169,6 +186,8 @@ def atualizar_horario_funcionamento(
             "ativo": h.ativo,
             "hora_inicio": h.hora_inicio.isoformat() if h.hora_inicio else None,
             "hora_fim": h.hora_fim.isoformat() if h.hora_fim else None,
+            "hora_inicio_2": h.hora_inicio_2.isoformat() if h.hora_inicio_2 else None,
+            "hora_fim_2": h.hora_fim_2.isoformat() if h.hora_fim_2 else None,
         }
         for h in dados.horarios
     ]

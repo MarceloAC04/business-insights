@@ -259,10 +259,16 @@ export interface ProdutoPadrao {
 export interface Servico {
   id: string;
   nome: string;
+  categoria: string;
   preco: number;
   /** Nulo até a usuária preencher (serviço antigo). Obrigatório em cadastro novo — base do agendamento público. */
   duracao_minutos: number | null;
   produtos_padrao: ProdutoPadrao[];
+}
+
+export interface CategoriaServico {
+  id: string;
+  nome: string;
 }
 
 // ── perfil ───────────────────────────────────────────────────────────────────
@@ -273,6 +279,9 @@ export interface Perfil {
   proprietaria: string;
   foto_url: string | null;
   telefone_whatsapp: string | null;
+  instagram_url: string;
+  endereco: string;
+  descricao_publica: string;
   meta_faturamento_mensal: number;
 }
 
@@ -307,6 +316,9 @@ export interface HorarioDia {
   /** "HH:MM:SS", só quando `ativo`. */
   hora_inicio: string | null;
   hora_fim: string | null;
+  /** Segundo turno opcional. Quando existe, começa depois do primeiro. */
+  hora_inicio_2: string | null;
+  hora_fim_2: string | null;
 }
 
 export interface HorarioFuncionamento {
@@ -325,11 +337,17 @@ export interface LinkAgendamento {
 export interface SalaoPublico {
   nome: string;
   foto_url: string | null;
+  telefone_whatsapp: string;
+  instagram_url: string;
+  endereco: string;
+  descricao_publica: string;
+  horarios: HorarioDia[];
 }
 
 export interface ServicoPublico {
   id: string;
   nome: string;
+  categoria: string;
   preco: number;
   duracao_minutos: number;
 }

@@ -3,11 +3,12 @@ Regras do agendamento público (endpoints-backend.md §10, lote L8).
 
 Único módulo sem Authorization: o `slug` na URL identifica o salão e não é
 secreto (a ideia é ser compartilhável). Por isso nenhuma consulta aqui pode
-vazar dado sensível do módulo `perfil` (telefone, custo fixo, estoque) — só
-nome, foto, serviços e preços, que já são públicos num cartão de visita.
+vazar dado sensível do módulo `perfil` (custos, estoque ou credenciais) — só
+os contatos e dados de apresentação que a profissional escolheu publicar,
+além de expediente, serviços e preços.
 
 As 3 operações delegam para as RPCs `security definer` de
-`database/migrations/005_agendamento_publico_rpc.sql` — exatamente as mesmas
+`database/migrations/005_agendamento_publico_rpc.sql` (estendida pela 010) — exatamente as mesmas
 que o `salao_web` chama direto no Supabase (branch `feat/react-supabase`,
 `lib/api/agendamento-publico.ts`). Não são reimplementadas aqui em cima das
 tabelas cruas: a versão anterior deste arquivo fazia isso e tinha uma janela

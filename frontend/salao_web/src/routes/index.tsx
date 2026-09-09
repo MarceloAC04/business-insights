@@ -87,7 +87,10 @@ function ResumoPage() {
   const { data: gastos } = useGastos(ano, mes);
   const { data: estoque } = useEstoque();
 
-  const primeiroNome = sessao?.usuario?.nome.split(" ")[0] ?? "";
+  // A API devolve o nome da proprietária. Este filtro também protege a saudação
+  // caso uma sessão antiga ou uma resposta malformada traga o e-mail no campo.
+  const nomeDaUsuario = sessao?.usuario?.nome.trim() ?? "";
+  const primeiroNome = nomeDaUsuario.includes("@") ? "" : (nomeDaUsuario.split(/\s+/)[0] ?? "");
 
   const serie = useMemo(
     () =>
@@ -436,7 +439,6 @@ function ResumoPage() {
                   </p>
                 )}
               </Card>
-
             </div>
           </div>
         </div>

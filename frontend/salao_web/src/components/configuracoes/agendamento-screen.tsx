@@ -5,7 +5,12 @@ import { Card, ListSkeleton, SectionTitle } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { textoDoErro, useHorarioFuncionamento, useLinkAgendamento, useSalvarHorarioFuncionamento } from "@/lib/queries";
+import {
+  textoDoErro,
+  useHorarioFuncionamento,
+  useLinkAgendamento,
+  useSalvarHorarioFuncionamento,
+} from "@/lib/queries";
 import type { HorarioDia } from "@/lib/types";
 
 /** domingo=0 … sábado=6, mesma convenção do backend. */
@@ -17,7 +22,18 @@ function horariosPadrao(): HorarioDia[] {
     ativo: dia_semana >= 1 && dia_semana <= 5,
     hora_inicio: dia_semana >= 1 && dia_semana <= 5 ? "09:00" : null,
     hora_fim: dia_semana >= 1 && dia_semana <= 5 ? "19:00" : null,
+    hora_inicio_2: null,
+    hora_fim_2: null,
   }));
+}
+
+function emMinutos(horario: string): number {
+  const [horas = 0, minutos = 0] = horario.split(":").map(Number);
+  return horas * 60 + minutos;
+}
+
+function emHorario(minutos: number): string {
+  return `${String(Math.floor(minutos / 60)).padStart(2, "0")}:${String(minutos % 60).padStart(2, "0")}`;
 }
 
 export function AgendamentoScreen() {
@@ -46,11 +62,37 @@ export function AgendamentoScreen() {
     );
   };
 
-  const alterarHorario = (dia_semana: number, campo: "hora_inicio" | "hora_fim", valor: string) => {
+  const alterarHorario = (
+    dia_semana: number,
+    campo: "hora_inicio" | "hora_fim" | "hora_inicio_2" | "hora_fim_2",
+    valor: string,
+  ) => {
     setHorarios((atual) =>
       atual.map((horario) =>
         horario.dia_semana === dia_semana ? { ...horario, [campo]: valor } : horario,
       ),
+    );
+  };
+
+  const alternarSegundoTurno = (dia_semana: number) => {
+    setHorarios((atual) =>
+      atual.map((horario) => {
+        if (horario.dia_semana !== dia_semana) return horario;
+        if (horario.hora_inicio_2) {
+          return { ...horario, hora_inicio_2: null, hora_fim_2: null };
+        }
+
+        const inicio = emMinutos(horario.hora_inicio ?? "09:00");
+        const fim = emMinutos(horario.hora_fim ?? "18:00");
+        const meio = inicio + Math.floor((fim - inicio - 60) / 60 / 2) * 60;
+        if (meio <= inicio || meio + 60 >= fim) return horario;
+        return {
+          ...horario,
+          hora_fim: emHorario(meio),
+          hora_inicio_2: emHorario(meio + 60),
+          hora_fim_2: emHorario(fim),
+        };
+      }),
     );
   };
 
@@ -90,7 +132,7 @@ export function AgendamentoScreen() {
       </Card>
 
       <Card className="p-4">
-        <SectionTitle hint="Só aparecem horários dentro do expediente de cada dia">
+        <SectionTitle hint="Defina manhã e tarde quando houver pausa; só esses horários aparecem para a cliente">
           Horário de funcionamento
         </SectionTitle>
         {carregandoHorario ? (
@@ -112,20 +154,65 @@ export function AgendamentoScreen() {
                     <span className="text-sm font-medium">{DIAS_SEMANA[horario.dia_semana]}</span>
                   </div>
                   {horario.ativo ? (
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">1º turno</span>
                       <Input
                         type="time"
                         value={horario.hora_inicio ?? ""}
-                        onChange={(evento) => alterarHorario(horario.dia_semana, "hora_inicio", evento.target.value)}
+                        onChange={(evento) =>
+                          alterarHorario(horario.dia_semana, "hora_inicio", evento.target.value)
+                        }
                         className="h-9 w-28"
+                        aria-label={`Início do primeiro turno de ${DIAS_SEMANA[horario.dia_semana]}`}
                       />
                       <span className="text-sm text-muted-foreground">às</span>
                       <Input
                         type="time"
                         value={horario.hora_fim ?? ""}
-                        onChange={(evento) => alterarHorario(horario.dia_semana, "hora_fim", evento.target.value)}
+                        onChange={(evento) =>
+                          alterarHorario(horario.dia_semana, "hora_fim", evento.target.value)
+                        }
                         className="h-9 w-28"
+                        aria-label={`Fim do primeiro turno de ${DIAS_SEMANA[horario.dia_semana]}`}
                       />
+                      {horario.hora_inicio_2 ? (
+                        <>
+                          <span className="ml-1 text-xs font-medium text-muted-foreground">
+                            2º turno
+                          </span>
+                          <Input
+                            type="time"
+                            value={horario.hora_inicio_2}
+                            onChange={(evento) =>
+                              alterarHorario(
+                                horario.dia_semana,
+                                "hora_inicio_2",
+                                evento.target.value,
+                              )
+                            }
+                            className="h-9 w-28"
+                            aria-label={`Início do segundo turno de ${DIAS_SEMANA[horario.dia_semana]}`}
+                          />
+                          <span className="text-sm text-muted-foreground">às</span>
+                          <Input
+                            type="time"
+                            value={horario.hora_fim_2 ?? ""}
+                            onChange={(evento) =>
+                              alterarHorario(horario.dia_semana, "hora_fim_2", evento.target.value)
+                            }
+                            className="h-9 w-28"
+                            aria-label={`Fim do segundo turno de ${DIAS_SEMANA[horario.dia_semana]}`}
+                          />
+                        </>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => alternarSegundoTurno(horario.dia_semana)}
+                      >
+                        {horario.hora_inicio_2 ? "Remover 2º turno" : "Adicionar 2º turno"}
+                      </Button>
                     </div>
                   ) : (
                     <span className="text-sm text-muted-foreground">Fechado</span>

@@ -1,5 +1,12 @@
 import { AppApi } from "../http";
-import type { CustosFixosPagina, HorarioDia, HorarioFuncionamento, LinkAgendamento, Perfil } from "../types";
+import { AppEnvironment } from "../env";
+import type {
+  CustosFixosPagina,
+  HorarioDia,
+  HorarioFuncionamento,
+  LinkAgendamento,
+  Perfil,
+} from "../types";
 import { Paths } from "./paths";
 
 /**
@@ -14,7 +21,11 @@ import { Paths } from "./paths";
 export interface PerfilBody {
   nome: string;
   proprietaria: string;
+  foto_url?: string | null;
   telefone_whatsapp?: string | null;
+  instagram_url?: string;
+  endereco?: string;
+  descricao_publica?: string;
   meta_faturamento_mensal?: number;
 }
 
@@ -32,6 +43,15 @@ export const PerfilApi = {
 
   atualizar(body: PerfilBody): Promise<void> {
     return AppApi.put(Paths.perfil, body).then(() => undefined);
+  },
+
+  enviarFoto(arquivo: File): Promise<{ foto_url: string }> {
+    if (AppEnvironment.isDemo) {
+      return Promise.resolve({ foto_url: URL.createObjectURL(arquivo) });
+    }
+    const form = new FormData();
+    form.append("arquivo", arquivo);
+    return AppApi.postArquivo<{ foto_url: string }>(Paths.fotoPerfil, form).then((r) => r.result);
   },
 
   /** `competencia` no formato `AAAA-MM`; ausente vale o mês corrente. */

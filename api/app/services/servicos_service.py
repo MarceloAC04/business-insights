@@ -4,7 +4,13 @@ from fastapi import HTTPException
 from supabase import Client
 
 from app.core.supabase_client import rows, row
-from app.schemas.servicos import ProdutoPadraoIn, ServicoIn, ServicoPatchIn
+from app.schemas.servicos import (
+    CategoriaServicoIn,
+    CategoriaServicoOut,
+    ProdutoPadraoIn,
+    ServicoIn,
+    ServicoPatchIn,
+)
 from app.services.estoque_rendimento import custo_por_unidade_consumo, unidade_consumo
 
 
@@ -69,10 +75,63 @@ def _validar_itens_estoque(supabase: Client, user_id: str, produtos: list[Produt
         )
 
 
+def _validar_categoria_cadastrada(supabase: Client, user_id: str, categoria: str) -> None:
+    resp = (
+        supabase.table("servico_categorias")
+        .select("id, nome")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    encontrada = any(
+        str(linha.get("nome") or "").casefold() == categoria.casefold()
+        for linha in rows(resp.data)
+    )
+    if not encontrada:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "codigo": "VALIDACAO_INVALIDA",
+                "mensagem": "Selecione uma categoria cadastrada",
+            },
+        )
+
+
+def listar_categorias(supabase: Client, user_id: str) -> dict:
+    resp = (
+        supabase.table("servico_categorias")
+        .select("id, nome")
+        .eq("user_id", user_id)
+        .order("nome")
+        .execute()
+    )
+    return {
+        "categorias": [
+            CategoriaServicoOut(id=str(linha["id"]), nome=str(linha["nome"])).model_dump()
+            for linha in rows(resp.data)
+        ]
+    }
+
+
+def criar_categoria(supabase: Client, user_id: str, body: CategoriaServicoIn) -> CategoriaServicoOut:
+    existentes = listar_categorias(supabase, user_id)["categorias"]
+    if any(categoria["nome"].casefold() == body.nome.casefold() for categoria in existentes):
+        raise HTTPException(
+            status_code=409,
+            detail={"codigo": "CATEGORIA_JA_EXISTE", "mensagem": "Esta categoria já está cadastrada"},
+        )
+    resp = (
+        supabase.table("servico_categorias")
+        .insert({"user_id": user_id, "nome": body.nome})
+        .execute()
+    )
+    linha = row(resp.data)
+    return CategoriaServicoOut(id=str(linha["id"]), nome=str(linha["nome"]))
+
+
 def _buscar_servico(supabase: Client, user_id: str, servico_id: str) -> dict:
     resp = (
         supabase.table("servicos")
-        .select("id, nome, preco, duracao_minutos, ativo")
+        .select("id, nome, categoria, preco, duracao_minutos, ativo")
         .eq("user_id", user_id)
         .eq("id", servico_id)
         .execute()
@@ -91,6 +150,7 @@ def _montar_saida(supabase: Client, servico: dict) -> dict:
     return {
         "id": servico["id"],
         "nome": servico["nome"],
+        "categoria": servico.get("categoria", "Outros"),
         "preco": servico["preco"],
         "duracao_minutos": servico.get("duracao_minutos"),
         "ativo": servico["ativo"],
@@ -101,7 +161,7 @@ def _montar_saida(supabase: Client, servico: dict) -> dict:
 def listar(supabase: Client, user_id: str) -> dict:
     resp = (
         supabase.table("servicos")
-        .select("id, nome, preco, duracao_minutos, ativo")
+        .select("id, nome, categoria, preco, duracao_minutos, ativo")
         .eq("user_id", user_id)
         .eq("ativo", True)
         .order("nome")
@@ -114,6 +174,7 @@ def listar(supabase: Client, user_id: str) -> dict:
             {
                 "id": s["id"],
                 "nome": s["nome"],
+                "categoria": s.get("categoria", "Outros"),
                 "preco": s["preco"],
                 "duracao_minutos": s.get("duracao_minutos"),
                 "ativo": s["ativo"],
@@ -125,12 +186,14 @@ def listar(supabase: Client, user_id: str) -> dict:
 
 
 def criar(supabase: Client, user_id: str, body: ServicoIn) -> dict:
+    _validar_categoria_cadastrada(supabase, user_id, body.categoria)
     _validar_itens_estoque(supabase, user_id, body.produtos_padrao)
     resp = (
         supabase.table("servicos")
         .insert({
             "user_id": user_id,
             "nome": body.nome,
+            "categoria": body.categoria,
             "preco": body.preco,
             "duracao_minutos": body.duracao_minutos,
             "ativo": True,
@@ -148,12 +211,16 @@ def criar(supabase: Client, user_id: str, body: ServicoIn) -> dict:
 
 def editar(supabase: Client, user_id: str, servico_id: str, body: ServicoPatchIn) -> dict:
     _buscar_servico(supabase, user_id, servico_id)
+    if body.categoria is not None:
+        _validar_categoria_cadastrada(supabase, user_id, body.categoria)
     if body.produtos_padrao is not None:
         _validar_itens_estoque(supabase, user_id, body.produtos_padrao)
 
     campos = {}
     if body.nome is not None:
         campos["nome"] = body.nome
+    if body.categoria is not None:
+        campos["categoria"] = body.categoria
     if body.preco is not None:
         campos["preco"] = body.preco
     if body.duracao_minutos is not None:

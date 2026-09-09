@@ -60,7 +60,7 @@ class TestServicosListar:
         mock_sb, _ = _mock_table_dispatcher({
             "servicos": [MagicMock(data=[{
                 "id": TEST_SERVICO_ID, "nome": "Extensão de cílios", "preco": 180.0,
-                "duracao_minutos": 90, "ativo": True,
+                "categoria": "Cílios", "duracao_minutos": 90, "ativo": True,
             }])],
             "servico_produtos_padrao": [MagicMock(data=[{
                 "servico_id": TEST_SERVICO_ID, "item_estoque_id": TEST_ITEM_ID, "quantidade": 1.0,
@@ -73,12 +73,14 @@ class TestServicosListar:
         resultado = servicos_service.listar(mock_sb, TEST_USER_ID)
 
         assert len(resultado["servicos"]) == 1
+        assert resultado["servicos"][0]["categoria"] == "Cílios"
         assert resultado["servicos"][0]["produtos_padrao"][0]["nome"] == "Fio mink 0.07"
 
 
 class TestServicosCriarEditarExcluir:
     def test_editar_filtra_por_user_id_no_update(self):
         mock_sb, mock_table = _mock_table_dispatcher({
+            "servico_categorias": [MagicMock(data=[{"id": "categoria-cilios", "nome": "Cílios"}])],
             "servicos": [
                 MagicMock(data=[{  # _buscar_servico (checagem)
                     "id": TEST_SERVICO_ID, "nome": "Extensão", "preco": 180.0,
@@ -95,9 +97,10 @@ class TestServicosCriarEditarExcluir:
 
         servicos_service.editar(
             mock_sb, TEST_USER_ID, TEST_SERVICO_ID,
-            ServicoPatchIn(nome="Extensão premium", preco=200.0),
+            ServicoPatchIn(nome="Extensão premium", categoria="Cílios", preco=200.0),
         )
 
+        assert mock_table.update.call_args.args[0]["categoria"] == "Cílios"
         eq_calls = [c.args for c in mock_table.eq.call_args_list]
         assert ("user_id", TEST_USER_ID) in eq_calls
 
@@ -119,16 +122,30 @@ class TestServicosCriarEditarExcluir:
         assert ("user_id", TEST_USER_ID) in eq_calls
         mock_table.delete.assert_not_called()
 
+    def test_criar_categoria_lista_e_cria_com_escopo_da_profissional(self):
+        mock_sb, mock_table = _mock_table_dispatcher({
+            "servico_categorias": [
+                MagicMock(data=[]),  # categorias existentes
+                MagicMock(data=[{"id": "categoria-nova", "nome": "Pele"}]),  # insert
+            ],
+        })
+
+        categoria = servicos_service.criar_categoria(
+            mock_sb,
+            TEST_USER_ID,
+            servicos_service.CategoriaServicoIn(nome="Pele"),
+        )
+
+        assert categoria.nome == "Pele"
+        assert mock_table.insert.call_args.args[0] == {"user_id": TEST_USER_ID, "nome": "Pele"}
+
 
 class TestServicosEndpoints:
     def test_criar_com_produto_padrao_inativo_retorna_404(self, client):
-        mock_sb = MagicMock()
-        mock_table = MagicMock()
-        mock_table.select.return_value = mock_table
-        mock_table.eq.return_value = mock_table
-        mock_table.in_.return_value = mock_table
-        mock_table.execute.return_value = MagicMock(data=[{"id": TEST_ITEM_ID, "ativo": False}])
-        mock_sb.table.return_value = mock_table
+        mock_sb, _ = _mock_table_dispatcher({
+            "servico_categorias": [MagicMock(data=[{"id": "categoria-cilios", "nome": "Cílios"}])],
+            "estoque_itens": [MagicMock(data=[{"id": TEST_ITEM_ID, "ativo": False}])],
+        })
         app.dependency_overrides[usuario_atual] = lambda: TEST_USER_ID
         app.dependency_overrides[get_supabase] = lambda: mock_sb
 
@@ -137,6 +154,7 @@ class TestServicosEndpoints:
                 "/v1/servicos",
                 json={
                     "nome": "Extensão",
+                    "categoria": "Cílios",
                     "preco": 180.0,
                     "duracao_minutos": 90,
                     "produtos_padrao": [{"item_estoque_id": TEST_ITEM_ID, "quantidade": 1}],

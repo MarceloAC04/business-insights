@@ -6,7 +6,15 @@ from supabase import Client
 from app.core.security import usuario_atual
 from app.core.supabase_client import get_supabase
 from app.schemas.envelope import ResponseModel, sucesso
-from app.schemas.servicos import ServicoIn, ServicoOut, ServicoPatchIn, ServicosListaOut
+from app.schemas.servicos import (
+    CategoriaServicoIn,
+    CategoriaServicoOut,
+    CategoriasServicoListaOut,
+    ServicoIn,
+    ServicoOut,
+    ServicoPatchIn,
+    ServicosListaOut,
+)
 from app.services import servicos_service as service
 
 router = APIRouter(prefix="/servicos", tags=["Serviços"])
@@ -29,6 +37,33 @@ def criar(
 ):
     resultado = service.criar(supabase, user_id, body)
     return sucesso(resultado)
+
+
+@router.get(
+    "/categorias",
+    response_model=ResponseModel[CategoriasServicoListaOut],
+    summary="Lista categorias cadastradas para os serviços",
+)
+def listar_categorias(
+    user_id: str = Depends(usuario_atual),
+    supabase: Client = Depends(get_supabase),
+):
+    resultado = service.listar_categorias(supabase, user_id)
+    return sucesso(resultado, total=len(resultado["categorias"]))
+
+
+@router.post(
+    "/categorias",
+    response_model=ResponseModel[CategoriaServicoOut],
+    summary="Cria categoria de serviço",
+)
+def criar_categoria(
+    body: CategoriaServicoIn,
+    user_id: str = Depends(usuario_atual),
+    supabase: Client = Depends(get_supabase),
+):
+    resultado = service.criar_categoria(supabase, user_id, body)
+    return sucesso(resultado.model_dump())
 
 
 @router.patch("/{servico_id}", response_model=ResponseModel[ServicoOut], summary="Edita serviço")

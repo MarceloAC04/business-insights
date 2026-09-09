@@ -767,7 +767,7 @@ já aconteceu.
 
 ---
 
-## 7. `perfil` — 10 operações
+## 7. `perfil` — 11 operações
 
 ### `GET /perfil` — `NOVO`
 ### `PUT /perfil` — `NOVO`
@@ -776,12 +776,32 @@ já aconteceu.
 { "salao": { "id": "uuid", "nome": "Thamires Borges Beauty",
              "proprietaria": "Thamires Borges", "foto_url": null,
              "telefone_whatsapp": "+5511999999999",
+             "instagram_url": "@thamiresbeauty",
+             "endereco": "Rua Exemplo, 123 — São Paulo, SP",
+             "descricao_publica": "Especialista em cílios e sobrancelhas.",
              "meta_faturamento_mensal": 9000.00 } }
 ```
 
 `PUT /perfil` aceita `meta_faturamento_mensal`; o Resumo usa essa meta para calcular
 o percentual alcançado. O `telefone_whatsapp` e o `limite_gasto_alerta` que hoje vivem no mock do ApiService
 migram: o telefone fica aqui, o limite vai para as **preferências de alerta** (§8).
+
+`foto_url`, `telefone_whatsapp`, `instagram_url`, `endereco` e `descricao_publica` são a
+apresentação pública do salão no link de agendamento (§10). Todos são opcionais e a
+profissional os edita na tela Perfil; endereço e Instagram não entram em cálculos financeiros.
+
+### `POST /perfil/foto` — `NOVO`
+
+Recebe `multipart/form-data` com o campo `arquivo` e devolve:
+
+```json
+{ "foto_url": "https://<projeto>.supabase.co/storage/v1/object/public/fotos-salao/saloes/<user_id>/perfil" }
+```
+
+Aceita somente JPEG, PNG e WebP, até **5 MB**. O FastAPI valida o tipo declarado e a
+assinatura do arquivo, grava em `fotos-salao/saloes/<user_id>/perfil` com a service role e
+devolve a URL pública; o navegador nunca acessa o Supabase Storage diretamente. A tela exibe
+a prévia retornada e só persiste `foto_url` no perfil quando a profissional salva os dados.
 
 ### `GET /perfil/custos-fixos` — `NOVO`
 
@@ -852,27 +872,29 @@ repetido — é o que permite "funciono seg-sex mas sábado só de manhã, domin
 ```json
 {
   "horarios": [
-    { "dia_semana": 0, "ativo": false, "hora_inicio": null, "hora_fim": null },
-    { "dia_semana": 1, "ativo": true,  "hora_inicio": "09:00", "hora_fim": "19:00" },
-    { "dia_semana": 2, "ativo": true,  "hora_inicio": "09:00", "hora_fim": "19:00" },
-    { "dia_semana": 3, "ativo": true,  "hora_inicio": "09:00", "hora_fim": "19:00" },
-    { "dia_semana": 4, "ativo": true,  "hora_inicio": "09:00", "hora_fim": "19:00" },
-    { "dia_semana": 5, "ativo": true,  "hora_inicio": "09:00", "hora_fim": "19:00" },
-    { "dia_semana": 6, "ativo": true,  "hora_inicio": "09:00", "hora_fim": "14:00" }
+    { "dia_semana": 0, "ativo": false, "hora_inicio": null, "hora_fim": null,
+      "hora_inicio_2": null, "hora_fim_2": null },
+    { "dia_semana": 1, "ativo": true,  "hora_inicio": "08:00", "hora_fim": "12:00",
+      "hora_inicio_2": "13:00", "hora_fim_2": "18:00" },
+    { "dia_semana": 2, "ativo": true,  "hora_inicio": "09:00", "hora_fim": "19:00",
+      "hora_inicio_2": null, "hora_fim_2": null }
   ]
 }
 ```
 
 `dia_semana`: `0` domingo … `6` sábado. O `PUT` **substitui os 7 dias de uma vez** —
 mesma filosofia do `PATCH /servicos/{id}` com `produtos_padrao`: o cliente manda o
-estado final da tela (um toggle + dois campos de hora por dia), o servidor não faz
-diff. Dia com `ativo: false` não abre horário nenhum, mesmo que `hora_inicio`/
-`hora_fim` venham preenchidos — o servidor ignora as horas quando o dia está inativo.
+estado final da tela (um toggle + primeiro turno + segundo turno opcional), o servidor
+não faz diff. Dia com `ativo: false` não abre horário nenhum e todas as horas são
+zeradas. O segundo turno é opcional, mas `hora_inicio_2` e `hora_fim_2` devem vir
+juntas; ele começa no mesmo instante ou depois de `hora_fim`, nunca se sobrepõe ao
+primeiro.
 
-`hora_inicio`/`hora_fim` obrigatórios e `hora_inicio < hora_fim` quando `ativo: true`,
-senão `422 VALIDACAO_INVALIDA`. **Não há exceção por data** (feriado, folga pontual)
-nesta versão — é dia da semana fixo. Se isso virar necessário, entra depois como uma
-tabela de bloqueios pontuais; não faz parte do escopo atual.
+`hora_inicio`/`hora_fim` obrigatórios e `hora_inicio < hora_fim` quando `ativo: true`;
+o mesmo vale para o segundo turno quando existir, senão `422 VALIDACAO_INVALIDA`.
+**Não há exceção por data** (feriado, folga pontual) nesta versão — é dia da semana
+fixo. Se isso virar necessário, entra depois como uma tabela de bloqueios pontuais;
+não faz parte do escopo atual.
 
 ### `GET /perfil/link-agendamento` — `NOVO`
 
@@ -889,7 +911,7 @@ URL que ela já divulgou, então fica manual/suporte enquanto não houver pedido
 
 ---
 
-## 8. `servicos` — 4 operações
+## 8. `servicos` — 6 operações
 
 Tabela de preços do salão. Módulo próprio para não estourar o `perfil`.
 
@@ -897,7 +919,7 @@ Tabela de preços do salão. Módulo próprio para não estourar o `perfil`.
 
 ```json
 { "servicos": [
-  { "id": "uuid", "nome": "Extensão de cílios", "preco": 180.00,
+  { "id": "uuid", "nome": "Extensão de cílios", "categoria": "Cílios", "preco": 180.00,
     "duracao_minutos": 90,
     "produtos_padrao": [
       { "item_estoque_id": "uuid", "nome": "Fio mink 0.07",
@@ -918,6 +940,24 @@ a menos, em vez de lembrar do zero. Tabela `servico_produtos_padrao` a criar.
 `nome` e `unidade` vêm **resolvidos do item**, não do que o cliente mandou: sem isso a
 tela teria que cruzar duas listas só para escrever "2 cx".
 
+### `GET /servicos/categorias` — `NOVO`
+
+```json
+{ "categorias": [{ "id": "uuid", "nome": "Cílios" }] }
+```
+
+Lista as categorias cadastradas pela profissional, inclusive as que ainda não têm serviço.
+É essa lista — e somente ela — que o seletor do formulário de serviço exibe.
+
+### `POST /servicos/categorias` — `NOVO`
+
+```json
+{ "nome": "Sobrancelhas" }
+```
+
+Cria uma categoria de 1 a 60 caracteres, única por salão sem diferenciar maiúsculas de
+minúsculas. Repetição devolve `409 CATEGORIA_JA_EXISTE`.
+
 ### `POST /servicos` — `NOVO`
 ### `PATCH /servicos/{id}` — `NOVO`
 
@@ -925,7 +965,7 @@ Mesmo corpo nos dois. O `PATCH` **substitui** a lista inteira de produtos padrã
 app manda o estado final da tela, não um diff:
 
 ```json
-{ "nome": "Extensão de cílios", "preco": 180.00, "duracao_minutos": 90,
+{ "nome": "Extensão de cílios", "categoria": "Cílios", "preco": 180.00, "duracao_minutos": 90,
   "produtos_padrao": [
     { "item_estoque_id": "uuid", "quantidade": 1 }
   ] }
@@ -938,6 +978,9 @@ app manda o estado final da tela, não um diff:
 - `item_estoque_id` repetido no mesmo corpo é **422** — duas linhas do mesmo item viram
   duas baixas que ninguém confere na hora de finalizar.
 - `quantidade` > 0.
+- `categoria` deve ser uma categoria já cadastrada em `POST /servicos/categorias`; a tela
+  oferece um seletor, não texto livre. O link público agrupa os serviços por essa categoria;
+  categorias sem serviços não são exibidas.
 
 ### `DELETE /servicos/{id}` — `NOVO`
 
@@ -1076,22 +1119,33 @@ salão (§7) para marcar um horário sozinho, sem login — decisões do dono do
 
 Autenticação: **nenhuma**. O `slug` na URL identifica o salão — não é secreto (a ideia
 é ser compartilhável), então nenhum dado sensível do salão pode vazar aqui além do que
-já é público num cartão de visita (nome, foto, serviços e preços).
+a profissional configura para o cartão de visita público (nome, foto, contatos,
+endereço, expediente, serviços e preços).
 
 ### `GET /agendamento-publico/{slug}` — `NOVO`
 
 ```json
 {
-  "salao": { "nome": "Thamires Borges Beauty", "foto_url": "https://..." },
+  "salao": {
+    "nome": "Thamires Borges Beauty", "foto_url": "https://...",
+    "telefone_whatsapp": "+5511999999999", "instagram_url": "@thamiresbeauty",
+    "endereco": "Rua Exemplo, 123 — São Paulo, SP",
+    "descricao_publica": "Especialista em cílios e sobrancelhas.",
+    "horarios": [{ "dia_semana": 1, "ativo": true,
+                   "hora_inicio": "08:00", "hora_fim": "12:00",
+                   "hora_inicio_2": "13:00", "hora_fim_2": "18:00" }]
+  },
   "servicos": [
-    { "id": "uuid", "nome": "Extensão de cílios", "preco": 180.00, "duracao_minutos": 90 }
+    { "id": "uuid", "nome": "Extensão de cílios", "categoria": "Cílios",
+      "preco": 180.00, "duracao_minutos": 90 }
   ]
 }
 ```
 
 `slug` inexistente ou salão inativo → `404 RECURSO_NAO_ENCONTRADO`. Não devolve
-`telefone_whatsapp`, custo fixo, estoque ou qualquer outro dado do módulo `perfil` —
-só o necessário pra montar a tela de agendar.
+custo fixo, estoque ou qualquer outro dado sensível do módulo `perfil` — os contatos,
+endereço e expediente acima são públicos porque a profissional opta por configurá-los
+para a cliente na própria tela Perfil.
 
 ### `GET /agendamento-publico/{slug}/horarios-disponiveis` — `NOVO`
 
@@ -1104,9 +1158,9 @@ Query: `data` (date, obrigatório), `servico_ids` (csv de uuid, obrigatório).
 }
 ```
 
-Cálculo, todo no servidor: pega o expediente do dia da semana de `data` em
+Cálculo, todo no servidor: pega os um ou dois turnos do dia da semana de `data` em
 `horario_funcionamento` (§7) — dia `ativo: false` devolve `horarios: []` — gera os
-slots possíveis a cada 30 min dentro do expediente, e remove os que colidem com
+slots possíveis a cada 30 min dentro de cada turno (nunca durante a pausa), e remove os que colidem com
 qualquer `atendimento` `agendado`/`finalizado` daquele dia (considerando a duração de
 cada um) ou que não caibam antes do fim do expediente com a `duracao_total_minutos`
 pedida. `data` no passado → `horarios: []` (não é erro, só não há o que oferecer).
@@ -1173,6 +1227,7 @@ entrada aqui = mensagem genérica na tela.
 | `ESTOQUE_INSUFICIENTE` | 409 | baixa maior que o saldo; `result.faltantes` lista o que falta. Reenviar com `confirmar_estoque_insuficiente: true` passa por cima (§2 e §6) |
 | `KIT_NAO_MONTADO` | 409 | venda maior que `quantidade_montada`; sem confirmação por cima |
 | `ITEM_EM_USO` | 409 | exclusão de item/serviço com histórico → use soft delete |
+| `CATEGORIA_JA_EXISTE` | 409 | categoria de serviço já cadastrada para o salão |
 | `CODIGO_BARRAS_JA_CADASTRADO` | 409 | `codigo_barras` do item já pertence a outro item do mesmo usuário |
 | `GASTO_JA_PAGO` | 409 | reservado; hoje `/pagar` é idempotente e devolve 200 |
 | `LIMITE_EXCEDIDO` | 429 | rate limit |
@@ -1214,7 +1269,7 @@ sem resposta → erro de conexão.
 | Tabela/coluna | Para quê |
 |---|---|
 | `servicos.duracao_minutos` | calcular quanto tempo um agendamento bloqueia na agenda (§8) |
-| `horario_funcionamento` (`salao_id`, `dia_semana`, `ativo`, `hora_inicio`, `hora_fim`) | expediente por dia da semana (§7) |
+| `horario_funcionamento` (`salao_id`, `dia_semana`, `ativo`, `hora_inicio`, `hora_fim`, `hora_inicio_2`, `hora_fim_2`) | expediente por dia da semana, com pausa opcional (§7) |
 | `salao.slug_agendamento` | URL fixa do link público (§7), único, gerado no cadastro |
 | `atendimentos.origem` (`interno` \| `publico`) | diferenciar na lista/alerta quem veio pelo link (§10) |
 

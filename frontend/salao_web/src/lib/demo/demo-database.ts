@@ -8,6 +8,7 @@ import type {
   AtendimentoServico,
   AtendimentosPagina,
   CategoriaEstoque,
+  CategoriaServico,
   CategoriaGasto,
   CustoFixo,
   CustosFixosPagina,
@@ -92,6 +93,7 @@ interface ItemRow {
 interface ServicoRow {
   id: string;
   nome: string;
+  categoria: string;
   preco: number;
   duracao_minutos: number | null;
   produtos_padrao: ProdutoPadrao[];
@@ -180,6 +182,7 @@ export class DemoDatabase {
   private readonly itens: ItemRow[] = [];
   private readonly movimentacoes: Movimentacao[] = [];
   private readonly servicos: ServicoRow[] = [];
+  private readonly categoriasServico: CategoriaServico[] = [];
   private readonly kits: KitRow[] = [];
   private readonly kitVendas: KitVendaRow[] = [];
   private readonly atendimentos: AtendimentoRow[] = [];
@@ -203,6 +206,9 @@ export class DemoDatabase {
     proprietaria: "",
     foto_url: null,
     telefone_whatsapp: null,
+    instagram_url: "",
+    endereco: "",
+    descricao_publica: "",
     meta_faturamento_mensal: 0,
   };
 
@@ -1216,26 +1222,57 @@ export class DemoDatabase {
     return this.envelope({ servicos: this.servicos }, this.servicos.length);
   }
 
-  createServico(body: Body): Envelope<null> {
-    this.servicos.push({
+  getCategoriasServico(): Envelope<{ categorias: CategoriaServico[] }> {
+    return this.envelope({ categorias: this.categoriasServico }, this.categoriasServico.length);
+  }
+
+  createCategoriaServico(body: Body): Envelope<CategoriaServico> {
+    const nome = texto(body, "nome").trim();
+    if (!nome || nome.length > 60) {
+      this.erro(AppErrorCodes.invalidValidation, 422, "Informe uma categoria de até 60 caracteres.");
+    }
+    if (this.categoriasServico.some((categoria) => categoria.nome.localeCompare(nome, "pt-BR", { sensitivity: "accent" }) === 0)) {
+      this.erro("CATEGORIA_JA_EXISTE", 409, "Esta categoria já está cadastrada.");
+    }
+    const categoria = { id: this.novoId("categoria"), nome };
+    this.categoriasServico.push(categoria);
+    this.categoriasServico.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+    return this.envelope(categoria);
+  }
+
+  private validarCategoriaServico(nome: string): void {
+    if (!this.categoriasServico.some((categoria) => categoria.nome === nome)) {
+      this.erro(AppErrorCodes.invalidValidation, 422, "Selecione uma categoria cadastrada.");
+    }
+  }
+
+  createServico(body: Body): Envelope<Servico> {
+    const categoria = texto(body, "categoria");
+    this.validarCategoriaServico(categoria);
+    const servico: ServicoRow = {
       id: this.novoId("servico"),
       nome: texto(body, "nome"),
+      categoria,
       preco: numero(body, "preco"),
       duracao_minutos: numero(body, "duracao_minutos"),
       produtos_padrao: this.produtosPadrao(body),
-    });
-    return this.vazio();
+    };
+    this.servicos.push(servico);
+    return this.envelope(servico);
   }
 
-  editServico(id: string, body: Body): Envelope<null> {
+  editServico(id: string, body: Body): Envelope<Servico> {
     const servico = this.servicos.find((e) => e.id === id);
     if (!servico) this.naoEncontrado("Serviço");
 
+    const categoria = texto(body, "categoria") || servico.categoria;
+    this.validarCategoriaServico(categoria);
     servico.nome = texto(body, "nome");
+    servico.categoria = categoria;
     servico.preco = numero(body, "preco");
     servico.duracao_minutos = numero(body, "duracao_minutos", servico.duracao_minutos ?? 0);
     servico.produtos_padrao = this.produtosPadrao(body);
-    return this.vazio();
+    return this.envelope(servico);
   }
 
   /**
@@ -1648,6 +1685,9 @@ export class DemoDatabase {
       proprietaria: "Thamires Borges",
       foto_url: null,
       telefone_whatsapp: "5511999990000",
+      instagram_url: "@thamiresbeauty",
+      endereco: "São Paulo, SP",
+      descricao_publica: "Especialista em cílios e sobrancelhas.",
       meta_faturamento_mensal: 9000,
     };
 
@@ -1712,6 +1752,7 @@ export class DemoDatabase {
       {
         id: this.novoId("servico"),
         nome: "Extensão de cílios",
+        categoria: "Cílios",
         preco: 180,
         duracao_minutos: 120,
         produtos_padrao: [produto(fio, 1), produto(cola, 1), produto(micropore, 2)],
@@ -1719,6 +1760,7 @@ export class DemoDatabase {
       {
         id: this.novoId("servico"),
         nome: "Manutenção de cílios",
+        categoria: "Cílios",
         preco: 100,
         duracao_minutos: 60,
         produtos_padrao: [],
@@ -1726,11 +1768,16 @@ export class DemoDatabase {
       {
         id: this.novoId("servico"),
         nome: "Sobrancelha fio a fio",
+        categoria: "Sobrancelhas",
         preco: 120,
         duracao_minutos: 45,
         produtos_padrao: [],
       },
     );
+    for (const nome of [...new Set(this.servicos.map((servico) => servico.categoria))]) {
+      this.categoriasServico.push({ id: this.novoId("categoria"), nome });
+    }
+    this.categoriasServico.sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
 
     this.custosFixos.push(
       { id: this.novoId("custo"), descricao: "Aluguel", valor: 1200, dia_vencimento: 5 },

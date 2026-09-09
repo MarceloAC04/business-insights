@@ -1,4 +1,4 @@
-import { Pencil, Plus, Scissors, Search, Trash2, TriangleAlert } from "lucide-react";
+import { Loader2, Pencil, Plus, Scissors, Search, Trash2, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Card, EmptyState, ListSkeleton, Money, Pill, SectionTitle } from "@/components/ui-kit";
@@ -24,9 +24,18 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { formatBRL, formatMoedaInput, parseMoedaInput } from "@/lib/format";
 import {
   textoDoErro,
+  useCategoriasServico,
+  useCriarCategoriaServico,
   useCriarServico,
   useEditarServico,
   useEstoque,
@@ -38,6 +47,7 @@ import type { Servico } from "@/lib/types";
 interface FormServico {
   id?: string;
   nome: string;
+  categoria: string;
   preco: string;
   duracao: string;
   produtos: { item_estoque_id: string; quantidade: number }[];
@@ -45,28 +55,43 @@ interface FormServico {
 
 export function ServicosScreen() {
   const { data: listaServicos, isPending: carregandoServicos } = useServicos();
+  const { data: listaCategorias, isPending: carregandoCategorias } = useCategoriasServico();
   const { data: estoque } = useEstoque();
   const criarServico = useCriarServico();
   const editarServico = useEditarServico();
   const excluirServico = useExcluirServico();
+  const criarCategoria = useCriarCategoriaServico();
 
   const [aberto, setAberto] = useState(false);
-  const [form, setForm] = useState<FormServico>({ nome: "", preco: "", duracao: "", produtos: [] });
+  const [form, setForm] = useState<FormServico>({
+    nome: "",
+    categoria: "",
+    preco: "",
+    duracao: "",
+    produtos: [],
+  });
   const [servicoParaExcluir, setServicoParaExcluir] = useState<Servico | null>(null);
   const [buscaServico, setBuscaServico] = useState("");
   const [buscaInsumo, setBuscaInsumo] = useState("");
+  const [dialogCategoriaAberto, setDialogCategoriaAberto] = useState(false);
+  const [novaCategoria, setNovaCategoria] = useState("");
 
-  const itens = estoque?.itens ?? [];
-  const servicos = listaServicos?.servicos ?? [];
+  const itens = useMemo(() => estoque?.itens ?? [], [estoque?.itens]);
+  const servicos = useMemo(() => listaServicos?.servicos ?? [], [listaServicos?.servicos]);
   const salvando = criarServico.isPending || editarServico.isPending;
   const servicosFiltrados = useMemo(() => {
     const busca = buscaServico.trim().toLocaleLowerCase("pt-BR");
-    return busca ? servicos.filter((servico) => servico.nome.toLocaleLowerCase("pt-BR").includes(busca)) : servicos;
+    return busca
+      ? servicos.filter((servico) => servico.nome.toLocaleLowerCase("pt-BR").includes(busca))
+      : servicos;
   }, [buscaServico, servicos]);
   const insumosFiltrados = useMemo(() => {
     const busca = buscaInsumo.trim().toLocaleLowerCase("pt-BR");
-    return busca ? itens.filter((item) => item.nome.toLocaleLowerCase("pt-BR").includes(busca)) : itens;
+    return busca
+      ? itens.filter((item) => item.nome.toLocaleLowerCase("pt-BR").includes(busca))
+      : itens;
   }, [buscaInsumo, itens]);
+  const categorias = listaCategorias?.categorias ?? [];
 
   /** Prévia local pelo custo médio de hoje; o custo real fica congelado ao finalizar. */
   const custoInsumos = (produtos: FormServico["produtos"]) =>
@@ -76,7 +101,7 @@ export function ServicosScreen() {
     }, 0);
 
   const abrirNovoServico = () => {
-    setForm({ nome: "", preco: "", duracao: "", produtos: [] });
+    setForm({ nome: "", categoria: "", preco: "", duracao: "", produtos: [] });
     setBuscaInsumo("");
     setAberto(true);
   };
@@ -85,6 +110,7 @@ export function ServicosScreen() {
     setForm({
       id: servico.id,
       nome: servico.nome,
+      categoria: servico.categoria ?? "Outros",
       preco: formatMoedaInput(String(Math.round(servico.preco * 100))),
       duracao: servico.duracao_minutos ? String(servico.duracao_minutos) : "",
       produtos: servico.produtos_padrao.map((produto) => ({
@@ -99,8 +125,8 @@ export function ServicosScreen() {
   const salvarServico = () => {
     const preco = parseMoedaInput(form.preco);
     const duracao_minutos = Number(form.duracao);
-    if (!form.nome.trim() || !(preco > 0)) {
-      toast.error("Informe o nome do serviço e um preço válido.");
+    if (!form.nome.trim() || !form.categoria.trim() || !(preco > 0)) {
+      toast.error("Informe o nome, a categoria e um preço válido.");
       return;
     }
     if (!(duracao_minutos > 0)) {
@@ -110,6 +136,7 @@ export function ServicosScreen() {
 
     const body = {
       nome: form.nome.trim(),
+      categoria: form.categoria.trim(),
       preco,
       duracao_minutos,
       produtos_padrao: form.produtos,
@@ -145,6 +172,30 @@ export function ServicosScreen() {
       },
       onError: (erro) => toast.error(textoDoErro(erro)),
     });
+  };
+
+  const abrirNovaCategoria = () => {
+    setNovaCategoria("");
+    setDialogCategoriaAberto(true);
+  };
+
+  const salvarCategoria = () => {
+    const nome = novaCategoria.trim();
+    if (!nome) {
+      toast.error("Informe o nome da categoria.");
+      return;
+    }
+    criarCategoria.mutate(
+      { nome },
+      {
+        onSuccess: (categoria) => {
+          setForm((atual) => ({ ...atual, categoria: categoria.nome }));
+          setDialogCategoriaAberto(false);
+          toast.success("Categoria cadastrada.");
+        },
+        onError: (erro) => toast.error(textoDoErro(erro)),
+      },
+    );
   };
 
   return (
@@ -202,6 +253,7 @@ export function ServicosScreen() {
                             : "sem insumos padrão"}
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          <Pill tone="brand">{servico.categoria || "Outros"}</Pill>
                           <Pill tone="brand">Preço {formatBRL(servico.preco)}</Pill>
                           <Pill>Custo {formatBRL(custo)}</Pill>
                           <Pill tone={servico.preco - custo >= 0 ? "positive" : "negative"}>
@@ -210,7 +262,12 @@ export function ServicosScreen() {
                         </div>
                       </div>
                       <div className="flex shrink-0 gap-1">
-                        <Button size="icon" variant="ghost" aria-label="Editar serviço" onClick={() => abrirEdicao(servico)}>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          aria-label="Editar serviço"
+                          onClick={() => abrirEdicao(servico)}
+                        >
                           <Pencil className="size-4" />
                         </Button>
                         <Button
@@ -239,7 +296,9 @@ export function ServicosScreen() {
             }
             acao={
               servicos.length ? (
-                <Button variant="outline" onClick={() => setBuscaServico("")}>Limpar busca</Button>
+                <Button variant="outline" onClick={() => setBuscaServico("")}>
+                  Limpar busca
+                </Button>
               ) : (
                 <Button onClick={abrirNovoServico}>Novo serviço</Button>
               )
@@ -266,6 +325,45 @@ export function ServicosScreen() {
                 placeholder="Ex.: extensão de cílios"
               />
             </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="categoria-servico">Categoria</Label>
+              <div className="flex gap-2">
+                <Select
+                  value={form.categoria}
+                  onValueChange={(categoria) => setForm({ ...form, categoria })}
+                  disabled={carregandoCategorias || categorias.length === 0}
+                >
+                  <SelectTrigger id="categoria-servico" className="flex-1">
+                    <SelectValue
+                      placeholder={
+                        carregandoCategorias
+                          ? "Carregando categorias..."
+                          : "Selecione uma categoria"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categorias.map((categoria) => (
+                      <SelectItem key={categoria.id} value={categoria.nome}>
+                        {categoria.nome}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  onClick={abrirNovaCategoria}
+                  aria-label="Adicionar nova categoria"
+                >
+                  <Plus className="size-4" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                O seletor mostra apenas categorias cadastradas. Use + para adicionar uma nova.
+              </p>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="preco-servico">Preço (R$)</Label>
@@ -273,7 +371,9 @@ export function ServicosScreen() {
                   id="preco-servico"
                   inputMode="decimal"
                   value={form.preco}
-                  onChange={(evento) => setForm({ ...form, preco: formatMoedaInput(evento.target.value) })}
+                  onChange={(evento) =>
+                    setForm({ ...form, preco: formatMoedaInput(evento.target.value) })
+                  }
                   placeholder="0,00"
                 />
               </div>
@@ -294,7 +394,8 @@ export function ServicosScreen() {
               <div>
                 <Label>Insumos padrão por atendimento</Label>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Em produtos por usos, informe quantos usos o atendimento consome. Nos demais, informe a quantidade física.
+                  Em produtos por usos, informe quantos usos o atendimento consome. Nos demais,
+                  informe a quantidade física.
                 </p>
               </div>
               <div className="relative">
@@ -309,13 +410,18 @@ export function ServicosScreen() {
               </div>
               <div className="max-h-52 space-y-1.5 overflow-y-auto rounded-xl border border-border p-2">
                 {insumosFiltrados.map((itemEstoque) => {
-                  const item = form.produtos.find((produto) => produto.item_estoque_id === itemEstoque.id);
+                  const item = form.produtos.find(
+                    (produto) => produto.item_estoque_id === itemEstoque.id,
+                  );
                   const rotuloConsumo =
                     itemEstoque.modo_controle === "rendimento_usos"
                       ? "uso(s) por atendimento"
                       : `${itemEstoque.unidade} por atendimento`;
                   return (
-                    <div key={itemEstoque.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5">
+                    <div
+                      key={itemEstoque.id}
+                      className="flex items-center gap-2 rounded-lg px-2 py-1.5"
+                    >
                       <Checkbox
                         checked={item !== undefined}
                         onCheckedChange={() => alternarInsumo(itemEstoque.id)}
@@ -339,7 +445,8 @@ export function ServicosScreen() {
                                   produto.item_estoque_id === itemEstoque.id
                                     ? {
                                         ...produto,
-                                        quantidade: Number(evento.target.value.replace(",", ".")) || 1,
+                                        quantidade:
+                                          Number(evento.target.value.replace(",", ".")) || 1,
                                       }
                                     : produto,
                                 ),
@@ -347,12 +454,20 @@ export function ServicosScreen() {
                             }
                           />
                           <span className="text-xs text-muted-foreground">
-                            {itemEstoque.modo_controle === "rendimento_usos" ? "usos" : itemEstoque.unidade}
+                            {itemEstoque.modo_controle === "rendimento_usos"
+                              ? "usos"
+                              : itemEstoque.unidade}
                           </span>
                         </div>
                       ) : (
-                        <Pill tone={itemEstoque.modo_controle === "rendimento_usos" ? "brand" : "neutral"}>
-                          {itemEstoque.modo_controle === "rendimento_usos" ? "Por uso" : `Por ${itemEstoque.unidade}`}
+                        <Pill
+                          tone={
+                            itemEstoque.modo_controle === "rendimento_usos" ? "brand" : "neutral"
+                          }
+                        >
+                          {itemEstoque.modo_controle === "rendimento_usos"
+                            ? "Por uso"
+                            : `Por ${itemEstoque.unidade}`}
                         </Pill>
                       )}
                     </div>
@@ -365,7 +480,8 @@ export function ServicosScreen() {
                 ) : null}
               </div>
               <p className="text-xs text-muted-foreground">
-                Custo estimado pelo custo médio de hoje: <Money value={custoInsumos(form.produtos)} />
+                Custo estimado pelo custo médio de hoje:{" "}
+                <Money value={custoInsumos(form.produtos)} />
               </p>
             </div>
           </div>
@@ -381,7 +497,54 @@ export function ServicosScreen() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={servicoParaExcluir !== null} onOpenChange={(aberto) => !aberto && setServicoParaExcluir(null)}>
+      <Dialog open={dialogCategoriaAberto} onOpenChange={setDialogCategoriaAberto}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Nova categoria</DialogTitle>
+            <DialogDescription>
+              Ela ficará disponível para selecionar nos seus serviços.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="nova-categoria">Nome da categoria</Label>
+            <Input
+              id="nova-categoria"
+              value={novaCategoria}
+              onChange={(evento) => setNovaCategoria(evento.target.value)}
+              placeholder="Ex.: Sobrancelhas"
+              maxLength={60}
+              onKeyDown={(evento) => {
+                if (evento.key === "Enter") {
+                  evento.preventDefault();
+                  salvarCategoria();
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDialogCategoriaAberto(false)}
+              disabled={criarCategoria.isPending}
+            >
+              Cancelar
+            </Button>
+            <Button onClick={salvarCategoria} disabled={criarCategoria.isPending}>
+              {criarCategoria.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Plus className="size-4" />
+              )}
+              Adicionar categoria
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={servicoParaExcluir !== null}
+        onOpenChange={(aberto) => !aberto && setServicoParaExcluir(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
@@ -389,7 +552,8 @@ export function ServicosScreen() {
               Excluir serviço
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {servicoParaExcluir?.nome} deixa de aparecer na tabela e no agendamento. Atendimentos passados não mudam.
+              {servicoParaExcluir?.nome} deixa de aparecer na tabela e no agendamento. Atendimentos
+              passados não mudam.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

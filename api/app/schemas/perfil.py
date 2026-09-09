@@ -13,6 +13,9 @@ class SalaoDados(BaseModel):
     proprietaria: str
     foto_url: str | None = None
     telefone_whatsapp: str
+    instagram_url: str = ""
+    endereco: str = ""
+    descricao_publica: str = ""
     meta_faturamento_mensal: float
 
 
@@ -20,11 +23,18 @@ class PerfilOut(BaseModel):
     salao: SalaoDados
 
 
+class FotoPerfilOut(BaseModel):
+    foto_url: str
+
+
 class PerfilUpdateIn(BaseModel):
     nome: str = Field(min_length=1)
     proprietaria: str = Field(default="")
-    foto_url: str | None = None
-    telefone_whatsapp: str = Field(default="")
+    foto_url: str | None = Field(default=None, max_length=500)
+    telefone_whatsapp: str = Field(default="", max_length=30)
+    instagram_url: str = Field(default="", max_length=200)
+    endereco: str = Field(default="", max_length=300)
+    descricao_publica: str = Field(default="", max_length=500)
     meta_faturamento_mensal: float = Field(ge=0, default=9000.0)
 
 
@@ -78,6 +88,8 @@ class HorarioDia(BaseModel):
     ativo: bool
     hora_inicio: time_ | None = None
     hora_fim: time_ | None = None
+    hora_inicio_2: time_ | None = None
+    hora_fim_2: time_ | None = None
 
     @model_validator(mode="after")
     def _validar(self):
@@ -88,9 +100,19 @@ class HorarioDia(BaseModel):
                 raise ValueError("hora_inicio e hora_fim são obrigatórios quando ativo=true")
             if self.hora_inicio >= self.hora_fim:
                 raise ValueError("hora_inicio deve ser menor que hora_fim")
+            segundo_turno_incompleto = (self.hora_inicio_2 is None) != (self.hora_fim_2 is None)
+            if segundo_turno_incompleto:
+                raise ValueError("hora_inicio_2 e hora_fim_2 devem ser preenchidos juntas")
+            if self.hora_inicio_2 is not None and self.hora_fim_2 is not None:
+                if self.hora_inicio_2 >= self.hora_fim_2:
+                    raise ValueError("hora_inicio_2 deve ser menor que hora_fim_2")
+                if self.hora_fim > self.hora_inicio_2:
+                    raise ValueError("o segundo turno deve começar depois do fim do primeiro")
         else:
             self.hora_inicio = None
             self.hora_fim = None
+            self.hora_inicio_2 = None
+            self.hora_fim_2 = None
         return self
 
 

@@ -9,6 +9,7 @@ from app.core.supabase_client import row, rows
 from app.schemas.perfil import (
     PerfilOut,
     SalaoDados,
+    FotoPerfilOut,
     PerfilUpdateIn,
     CustoFixoIn,
     CustoFixoPatchIn,
@@ -18,6 +19,9 @@ from app.schemas.perfil import (
 )
 
 _FUSO_BRASIL = timezone(timedelta(hours=-3))
+_BUCKET_FOTOS_SALAO = "fotos-salao"
+_TAMANHO_MAXIMO_FOTO = 5 * 1024 * 1024
+_TIPOS_DE_IMAGEM = {"image/jpeg", "image/png", "image/webp"}
 
 
 def _hoje_brasil() -> date:
@@ -64,6 +68,9 @@ def obter_perfil(supabase: Client, user_id: str) -> PerfilOut:
             proprietaria=linha.get("nome_proprietaria", ""),
             foto_url=linha.get("foto_url"),
             telefone_whatsapp=linha.get("telefone", ""),
+            instagram_url=linha.get("instagram_url", ""),
+            endereco=linha.get("endereco", ""),
+            descricao_publica=linha.get("descricao_publica", ""),
             meta_faturamento_mensal=float(linha.get("meta_faturamento_mensal", 9000.0)),
         )
     )
@@ -77,16 +84,61 @@ def atualizar_perfil(supabase: Client, user_id: str, dados: PerfilUpdateIn) -> P
         "telefone": dados.telefone_whatsapp,
         "meta_faturamento_mensal": dados.meta_faturamento_mensal,
     }
-    # `foto_url` é opcional e o frontend hoje nunca o envia (não existe upload de
-    # foto na tela de perfil) — se ele entrasse no update incondicionalmente, todo
-    # PUT /perfil (inclusive um que só muda a meta) apagaria uma foto já salva,
-    # porque o Pydantic não distingue "campo omitido" de "campo enviado como null".
-    # Só escreve quando vier preenchido; não há forma de limpar a foto por este
-    # endpoint hoje, mas nenhum cliente atual depende disso.
-    if dados.foto_url is not None:
+    # Campos públicos opcionais só mudam quando o cliente os enviou. Assim um
+    # cliente antigo não apaga foto, descrição ou contatos já configurados.
+    if "foto_url" in dados.model_fields_set:
         campos["foto_url"] = dados.foto_url
+    if "instagram_url" in dados.model_fields_set:
+        campos["instagram_url"] = dados.instagram_url.strip()
+    if "endereco" in dados.model_fields_set:
+        campos["endereco"] = dados.endereco.strip()
+    if "descricao_publica" in dados.model_fields_set:
+        campos["descricao_publica"] = dados.descricao_publica.strip()
     supabase.table("perfil_salao").update(campos).eq("user_id", user_id).execute()
     return obter_perfil(supabase, user_id)
+
+
+def _detectar_tipo_imagem(conteudo: bytes) -> str | None:
+    if conteudo.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if conteudo.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(conteudo) >= 12 and conteudo[:4] == b"RIFF" and conteudo[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def enviar_foto(supabase: Client, user_id: str, conteudo: bytes, content_type: str | None) -> FotoPerfilOut:
+    """Guarda uma única foto pública por salão, validando tipo e tamanho no servidor."""
+    if not conteudo:
+        raise HTTPException(
+            status_code=422,
+            detail={"codigo": "VALIDACAO_INVALIDA", "mensagem": "Escolha uma imagem para enviar"},
+        )
+    if len(conteudo) > _TAMANHO_MAXIMO_FOTO:
+        raise HTTPException(
+            status_code=422,
+            detail={"codigo": "VALIDACAO_INVALIDA", "mensagem": "A imagem deve ter no máximo 5 MB"},
+        )
+
+    tipo_detectado = _detectar_tipo_imagem(conteudo)
+    if content_type not in _TIPOS_DE_IMAGEM or tipo_detectado != content_type:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "codigo": "VALIDACAO_INVALIDA",
+                "mensagem": "Envie uma imagem JPEG, PNG ou WebP válida",
+            },
+        )
+
+    caminho = f"saloes/{user_id}/perfil"
+    bucket = supabase.storage.from_(_BUCKET_FOTOS_SALAO)
+    bucket.upload(
+        caminho,
+        conteudo,
+        file_options={"content-type": tipo_detectado, "upsert": "true", "cache-control": "3600"},
+    )
+    return FotoPerfilOut(foto_url=bucket.get_public_url(caminho))
 
 
 def _competencia_para_date(competencia_str: str) -> str:

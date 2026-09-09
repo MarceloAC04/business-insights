@@ -31,20 +31,35 @@ from app.schemas.envelope import sucesso, ResponseModel
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
-def _buscar_salao(supabase: Client, user_id: str) -> SalaoOut:
+def _buscar_salao(supabase: Client, user_id: str) -> tuple[SalaoOut, str]:
     resp = (
         supabase.table("perfil_salao")
-        .select("id, nome_salao, foto_url")
+        .select("id, nome_salao, nome_proprietaria, foto_url")
         .eq("user_id", user_id)
         .single()
         .execute()
     )
     linha = row(resp.data)
-    return SalaoOut(
-        id=linha.get("id", user_id),
-        nome=linha.get("nome_salao", "Meu Salão"),
-        foto_url=linha.get("foto_url"),
+    return (
+        SalaoOut(
+            id=linha.get("id", user_id),
+            nome=linha.get("nome_salao", "Meu Salão"),
+            foto_url=linha.get("foto_url"),
+        ),
+        str(linha.get("nome_proprietaria") or "").strip(),
     )
+
+
+def _nome_de_exibicao(user, nome_proprietaria: str) -> str:
+    """Escolhe um nome humano para a saudação, jamais o e-mail da conta."""
+    metadata = getattr(user, "user_metadata", None) or {}
+    nome_metadata = metadata.get("nome", "") if isinstance(metadata, dict) else ""
+
+    for nome in (nome_metadata, nome_proprietaria):
+        nome_limpo = str(nome or "").strip()
+        if nome_limpo and "@" not in nome_limpo:
+            return nome_limpo
+    return ""
 
 
 def _montar_sessao(supabase: Client, auth_response) -> SessaoOut:
@@ -56,12 +71,12 @@ def _montar_sessao(supabase: Client, auth_response) -> SessaoOut:
             detail={"codigo": "AUTH_CREDENCIAIS_INVALIDAS", "mensagem": "E-mail ou senha incorretos"},
         )
 
+    salao, nome_proprietaria = _buscar_salao(supabase, user.id)
     usuario = UsuarioOut(
         id=user.id,
-        nome=(user.user_metadata or {}).get("nome", user.email or ""),
+        nome=_nome_de_exibicao(user, nome_proprietaria),
         email=user.email or "",
     )
-    salao = _buscar_salao(supabase, user.id)
 
     return SessaoOut(
         token=session.access_token,
@@ -152,11 +167,11 @@ def eu(user_id: str = Depends(usuario_atual), supabase: Client = Depends(get_sup
     resp = supabase.auth.admin.get_user_by_id(user_id)
     user = resp.user if hasattr(resp, "user") else resp
 
+    salao, nome_proprietaria = _buscar_salao(supabase, user_id)
     usuario = UsuarioOut(
         id=user_id,
-        nome=(getattr(user, "user_metadata", None) or {}).get("nome", getattr(user, "email", "") or ""),
+        nome=_nome_de_exibicao(user, nome_proprietaria),
         email=getattr(user, "email", "") or "",
     )
-    salao = _buscar_salao(supabase, user_id)
 
     return sucesso(EuOut(usuario=usuario, salao=salao).model_dump())

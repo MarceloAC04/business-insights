@@ -21,7 +21,9 @@ import {
   ChevronRight,
   List as ListIcon,
   Pencil,
+  Plus,
   Search,
+  Scissors,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -75,19 +77,35 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { AtendimentoBody } from "@/lib/api";
-import { formatBRL, formatDate, formatHora, formatTelefone } from "@/lib/format";
+import {
+  formatBRL,
+  formatDate,
+  formatHora,
+  formatMoedaInput,
+  formatTelefone,
+  parseMoedaInput,
+} from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   textoDoErro,
   useAtendimentos,
   useCancelarAtendimento,
+  useCategoriasServico,
   useCriarAtendimento,
+  useCriarCategoriaServico,
+  useCriarServico,
   useEditarAtendimento,
   useEstoque,
   useFinalizarAtendimento,
   useServicos,
 } from "@/lib/queries";
-import type { Atendimento, FaltanteEstoque, ItemEstoque, StatusAtendimento } from "@/lib/types";
+import type {
+  Atendimento,
+  FaltanteEstoque,
+  ItemEstoque,
+  Servico,
+  StatusAtendimento,
+} from "@/lib/types";
 
 export const Route = createFileRoute("/atendimentos")({
   head: () => ({
@@ -195,7 +213,8 @@ function AtendimentosPage() {
   const [detalhe, setDetalhe] = useState<Atendimento | null>(null);
   const { data: catalogo } = useServicos();
   const duracaoPorServico = useMemo(
-    () => new Map((catalogo?.servicos ?? []).map((servico) => [servico.id, servico.duracao_minutos])),
+    () =>
+      new Map((catalogo?.servicos ?? []).map((servico) => [servico.id, servico.duracao_minutos])),
     [catalogo],
   );
 
@@ -612,7 +631,10 @@ function AtendimentoCard({
 
         {a.materiais.length ? (
           <p className="mt-2 truncate text-xs text-muted-foreground">
-            Produtos: {a.materiais.map((m) => `${m.nome} (${m.quantidade} ${m.unidade_consumo ?? ""})`).join(", ")}
+            Produtos:{" "}
+            {a.materiais
+              .map((m) => `${m.nome} (${m.quantidade} ${m.unidade_consumo ?? ""})`)
+              .join(", ")}
           </p>
         ) : null}
       </button>
@@ -694,7 +716,10 @@ function DetalhesAtendimento({
             </p>
             <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
               {atendimento.servicos.map((servico, indice) => (
-                <li key={`${servico.servico_id ?? servico.nome}-${indice}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                <li
+                  key={`${servico.servico_id ?? servico.nome}-${indice}`}
+                  className="flex items-center justify-between gap-3 px-3 py-2.5"
+                >
                   <span className="min-w-0 truncate text-sm font-medium">{servico.nome}</span>
                   <span className="shrink-0 text-sm text-muted-foreground">
                     {formatBRL(servico.preco)}
@@ -711,7 +736,10 @@ function DetalhesAtendimento({
               </p>
               <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
                 {atendimento.materiais.map((material, indice) => (
-                  <li key={`${material.item_estoque_id ?? material.nome}-${indice}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                  <li
+                    key={`${material.item_estoque_id ?? material.nome}-${indice}`}
+                    className="flex items-center justify-between gap-3 px-3 py-2.5"
+                  >
                     <span className="min-w-0 text-sm font-medium">
                       {material.nome}{" "}
                       <span className="text-muted-foreground">
@@ -785,6 +813,7 @@ function FormularioAtendimento({
   const [hora, setHora] = useState("09:00");
   const [escolhidos, setEscolhidos] = useState<string[]>([]);
   const [chave, setChave] = useState("");
+  const [cadastroServicoAberto, setCadastroServicoAberto] = useState(false);
 
   // Sincroniza os campos quando o diálogo abre (padrão do protótipo: estado
   // derivado da chave, sem `useEffect`).
@@ -903,7 +932,18 @@ function FormularioAtendimento({
             O preço é o do catálogo, congelado no ato pelo servidor.
           */}
           <div className="space-y-1.5">
-            <Label>Serviços</Label>
+            <div className="flex items-center justify-between gap-3">
+              <Label>Serviços</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setCadastroServicoAberto(true)}
+              >
+                <Plus className="size-4" />
+                Adicionar serviço
+              </Button>
+            </div>
             <ul className="space-y-2">
               {servicos.map((s) => (
                 <li key={s.id}>
@@ -943,6 +983,223 @@ function FormularioAtendimento({
             </Button>
           </DialogFooter>
         </form>
+      </DialogContent>
+      <CadastroRapidoServico
+        aberto={cadastroServicoAberto}
+        onFechar={() => setCadastroServicoAberto(false)}
+        onCriado={(servico) => {
+          setEscolhidos((atuais) =>
+            atuais.includes(servico.id) ? atuais : [...atuais, servico.id],
+          );
+          setCadastroServicoAberto(false);
+        }}
+      />
+    </Dialog>
+  );
+}
+
+/**
+ * Cadastro mínimo para não interromper um agendamento. Insumos padrão continuam
+ * opcionais e podem ser detalhados depois na área de Serviços do perfil.
+ */
+function CadastroRapidoServico({
+  aberto,
+  onFechar,
+  onCriado,
+}: {
+  aberto: boolean;
+  onFechar: () => void;
+  onCriado: (servico: Servico) => void;
+}) {
+  const { data: listaCategorias, isPending: carregandoCategorias } = useCategoriasServico();
+  const criarServico = useCriarServico();
+  const criarCategoria = useCriarCategoriaServico();
+  const [nome, setNome] = useState("");
+  const [categoria, setCategoria] = useState("");
+  const [preco, setPreco] = useState("");
+  const [duracao, setDuracao] = useState("");
+  const [novaCategoriaAberta, setNovaCategoriaAberta] = useState(false);
+  const [novaCategoria, setNovaCategoria] = useState("");
+
+  const categorias = listaCategorias?.categorias ?? [];
+  const salvando = criarServico.isPending || criarCategoria.isPending;
+
+  function fechar() {
+    if (salvando) return;
+    setNome("");
+    setCategoria("");
+    setPreco("");
+    setDuracao("");
+    setNovaCategoria("");
+    setNovaCategoriaAberta(false);
+    onFechar();
+  }
+
+  function salvarCategoria() {
+    const nomeCategoria = novaCategoria.trim();
+    if (!nomeCategoria) {
+      toast.error("Informe o nome da categoria.");
+      return;
+    }
+    criarCategoria.mutate(
+      { nome: nomeCategoria },
+      {
+        onSuccess: (categoriaCriada) => {
+          setCategoria(categoriaCriada.nome);
+          setNovaCategoria("");
+          setNovaCategoriaAberta(false);
+          toast.success("Categoria cadastrada.");
+        },
+        onError: (erro) => toast.error(textoDoErro(erro)),
+      },
+    );
+  }
+
+  function salvarServico() {
+    const valor = parseMoedaInput(preco);
+    const duracaoMinutos = Number(duracao);
+    if (!nome.trim() || !categoria || !(valor > 0)) {
+      toast.error("Informe o nome, a categoria e um preço válido.");
+      return;
+    }
+    if (!(duracaoMinutos > 0)) {
+      toast.error("Informe a duração do serviço em minutos.");
+      return;
+    }
+
+    criarServico.mutate(
+      {
+        nome: nome.trim(),
+        categoria,
+        preco: valor,
+        duracao_minutos: duracaoMinutos,
+        produtos_padrao: [],
+      },
+      {
+        onSuccess: (servico) => {
+          toast.success("Serviço adicionado ao atendimento.");
+          onCriado(servico);
+          setNome("");
+          setCategoria("");
+          setPreco("");
+          setDuracao("");
+        },
+        onError: (erro) => toast.error(textoDoErro(erro)),
+      },
+    );
+  }
+
+  return (
+    <Dialog open={aberto} onOpenChange={(visivel) => !visivel && fechar()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Adicionar serviço</DialogTitle>
+          <DialogDescription>
+            Cadastre o essencial agora. Os insumos padrão podem ser configurados depois no Perfil.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="servico-rapido-nome">Nome do serviço</Label>
+            <Input
+              id="servico-rapido-nome"
+              value={nome}
+              onChange={(evento) => setNome(evento.target.value)}
+              placeholder="Ex.: extensão de cílios"
+              maxLength={100}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="servico-rapido-categoria">Categoria</Label>
+            <div className="flex gap-2">
+              <Select
+                value={categoria}
+                onValueChange={setCategoria}
+                disabled={carregandoCategorias || categorias.length === 0 || salvando}
+              >
+                <SelectTrigger id="servico-rapido-categoria" className="flex-1">
+                  <SelectValue
+                    placeholder={
+                      carregandoCategorias ? "Carregando categorias..." : "Selecione uma categoria"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {categorias.map((item) => (
+                    <SelectItem key={item.id} value={item.nome}>
+                      {item.nome}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                aria-label="Adicionar nova categoria"
+                onClick={() => setNovaCategoriaAberta((atual) => !atual)}
+                disabled={salvando}
+              >
+                <Plus className="size-4" />
+              </Button>
+            </div>
+            {novaCategoriaAberta ? (
+              <div className="flex gap-2 rounded-xl border border-border bg-surface-2 p-2">
+                <Input
+                  value={novaCategoria}
+                  onChange={(evento) => setNovaCategoria(evento.target.value)}
+                  placeholder="Nome da nova categoria"
+                  maxLength={60}
+                  onKeyDown={(evento) => {
+                    if (evento.key === "Enter") {
+                      evento.preventDefault();
+                      salvarCategoria();
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={salvarCategoria}
+                  disabled={criarCategoria.isPending}
+                >
+                  Salvar categoria
+                </Button>
+              </div>
+            ) : null}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="servico-rapido-preco">Preço (R$)</Label>
+              <Input
+                id="servico-rapido-preco"
+                inputMode="decimal"
+                value={preco}
+                onChange={(evento) => setPreco(formatMoedaInput(evento.target.value))}
+                placeholder="0,00"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="servico-rapido-duracao">Duração (min)</Label>
+              <Input
+                id="servico-rapido-duracao"
+                inputMode="numeric"
+                value={duracao}
+                onChange={(evento) => setDuracao(evento.target.value.replace(/\D/g, ""))}
+                placeholder="Ex.: 60"
+              />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={fechar} disabled={salvando}>
+            Cancelar
+          </Button>
+          <Button type="button" onClick={salvarServico} disabled={salvando}>
+            <Scissors className="size-4" />
+            {criarServico.isPending ? "Adicionando..." : "Adicionar ao atendimento"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -1003,7 +1260,9 @@ function DialogFinalizar({
   const outrosProdutos = itens.filter((i) => !idsAtribuidos.has(i.id));
   const buscaOutrosNormalizada = buscaOutrosProdutos.trim().toLocaleLowerCase("pt-BR");
   const outrosProdutosFiltrados = buscaOutrosNormalizada
-    ? outrosProdutos.filter((item) => item.nome.toLocaleLowerCase("pt-BR").includes(buscaOutrosNormalizada))
+    ? outrosProdutos.filter((item) =>
+        item.nome.toLocaleLowerCase("pt-BR").includes(buscaOutrosNormalizada),
+      )
     : outrosProdutos;
 
   // Sem anotar `MaterialEntrada[]`: a união com o material avulso (`nome`/`preco`)

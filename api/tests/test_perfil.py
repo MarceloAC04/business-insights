@@ -3,6 +3,7 @@ Testes unitários e de integração para o módulo /perfil e /perfil/custos-fixo
 """
 
 import uuid
+from io import BytesIO
 from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.security import usuario_atual
 from app.core.supabase_client import get_supabase
-from app.schemas.perfil import CustoFixoPatchIn, PerfilUpdateIn
+from app.schemas.perfil import CustoFixoPatchIn, HorarioDia, PerfilUpdateIn
 from app.services import perfil_service
 
 
@@ -38,6 +39,9 @@ class TestPerfilEndpoints:
                 "nome_proprietaria": "Thamires Borges",
                 "foto_url": None,
                 "telefone": "5511999990000",
+                "instagram_url": "@thamiresbeauty",
+                "endereco": "São Paulo, SP",
+                "descricao_publica": "Especialista em cílios",
                 "meta_faturamento_mensal": 9000.0,
             }
         )
@@ -50,6 +54,7 @@ class TestPerfilEndpoints:
             assert response.status_code == 200
             data = response.json()
             assert data["result"]["salao"]["nome"] == "Thamires Borges Beauty"
+            assert data["result"]["salao"]["instagram_url"] == "@thamiresbeauty"
             assert data["result"]["salao"]["meta_faturamento_mensal"] == 9000.0
         finally:
             app.dependency_overrides.clear()
@@ -89,6 +94,42 @@ class TestPerfilEndpoints:
             assert len(data["result"]["custos"]) == 1
             assert data["result"]["custos"][0]["pago"] is True
             assert data["result"]["custos"][0]["competencia"] == "2026-09"
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_enviar_foto_png_valida_e_devolve_url_publica(self, client):
+        mock_sb = MagicMock()
+        bucket = MagicMock()
+        bucket.get_public_url.return_value = "https://cdn.exemplo/foto"
+        mock_sb.storage.from_.return_value = bucket
+        app.dependency_overrides[usuario_atual] = lambda: TEST_USER_ID
+        app.dependency_overrides[get_supabase] = lambda: mock_sb
+
+        try:
+            png = b"\x89PNG\r\n\x1a\n" + b"imagem"
+            response = client.post(
+                "/v1/perfil/foto",
+                files={"arquivo": ("logo.png", BytesIO(png), "image/png")},
+            )
+            assert response.status_code == 200
+            assert response.json()["result"]["foto_url"] == "https://cdn.exemplo/foto"
+            bucket.upload.assert_called_once()
+            assert bucket.upload.call_args.args[0] == f"saloes/{TEST_USER_ID}/perfil"
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_enviar_foto_rejeita_tipo_que_nao_e_imagem(self, client):
+        mock_sb = MagicMock()
+        app.dependency_overrides[usuario_atual] = lambda: TEST_USER_ID
+        app.dependency_overrides[get_supabase] = lambda: mock_sb
+
+        try:
+            response = client.post(
+                "/v1/perfil/foto",
+                files={"arquivo": ("texto.txt", BytesIO(b"nao sou uma imagem"), "text/plain")},
+            )
+            assert response.status_code == 422
+            mock_sb.storage.from_.assert_not_called()
         finally:
             app.dependency_overrides.clear()
 
@@ -166,6 +207,30 @@ class TestPerfilAtualizarNaoApagaFoto:
         campos_enviados = mock_table.update.call_args.args[0]
         assert "foto_url" not in campos_enviados
         assert campos_enviados["nome_salao"] == "Salão Novo"
+
+
+class TestHorarioEmDoisTurnos:
+    def test_aceita_pausa_entre_os_turnos(self):
+        horario = HorarioDia(
+            dia_semana=2,
+            ativo=True,
+            hora_inicio="08:00",
+            hora_fim="12:00",
+            hora_inicio_2="13:00",
+            hora_fim_2="18:00",
+        )
+        assert horario.hora_inicio_2.isoformat() == "13:00:00"
+
+    def test_rejeita_turnos_sobrepostos(self):
+        with pytest.raises(ValueError, match="segundo turno"):
+            HorarioDia(
+                dia_semana=2,
+                ativo=True,
+                hora_inicio="08:00",
+                hora_fim="12:00",
+                hora_inicio_2="11:30",
+                hora_fim_2="18:00",
+            )
 
 
 class TestPerfilCustosFixosEscopoPorUsuario:

@@ -1,27 +1,68 @@
-from supabase import create_client, Client
+import httpx
+from postgrest import SyncPostgrestClient
+from supabase import Client
+from supabase.lib.client_options import ClientOptions
 from app.core.config import get_settings
-from functools import lru_cache
 
 
-@lru_cache
+class ClientePostgrestHttp1(SyncPostgrestClient):
+    """Cliente REST sem HTTP/2, mais estável para o proxy do Supabase."""
+
+    def create_session(
+        self,
+        base_url: str,
+        headers: dict[str, str],
+        timeout: int | float | httpx.Timeout,
+        verify: bool = True,
+    ) -> httpx.Client:
+        return httpx.Client(
+            base_url=base_url,
+            headers=headers,
+            timeout=timeout,
+            verify=verify,
+            follow_redirects=True,
+            http2=False,
+        )
+
+
+class ClienteSupabaseHttp1(Client):
+    """Supabase cujo PostgREST usa HTTP/1.1 em vez do padrão HTTP/2 da SDK."""
+
+    @staticmethod
+    def _init_postgrest_client(
+        rest_url: str,
+        headers: dict[str, str],
+        schema: str,
+        timeout: int | float | httpx.Timeout,
+    ) -> SyncPostgrestClient:
+        return ClientePostgrestHttp1(rest_url, headers=headers, schema=schema, timeout=timeout)
+
+
+def _criar_cliente(supabase_url: str, supabase_key: str) -> Client:
+    # A SDK configura o PostgREST com HTTP/2 internamente. Na rede local ele
+    # encerra streams sob várias requisições simultâneas, produzindo 500
+    # intermitente como `RemoteProtocolError: Server disconnected`.
+    return ClienteSupabaseHttp1(
+        supabase_url,
+        supabase_key,
+        options=ClientOptions(auto_refresh_token=False, persist_session=False),
+    )
+
+
 def get_supabase() -> Client:
     """
-    Cliente Supabase singleton usando a service key. A service key bypassa o
-    RLS — use apenas para operação administrativa/de servidor (consultas com
-    a autorização derivada do JWT já validado, não do Supabase Auth).
+    Cliente Supabase novo por requisição usando a service key. A service key
+    bypassa o RLS — use apenas para operação administrativa/de servidor
+    (consultas com a autorização derivada do JWT já validado, não do Supabase
+    Auth).
 
     NUNCA chame `.auth.sign_in_with_password` / `.refresh_session` /
-    `.sign_out` neste cliente: a lib troca o header `Authorization` do
-    cliente inteiro para o token da sessão a cada evento de auth (
-    `SIGNED_IN`/`TOKEN_REFRESHED`/`SIGNED_OUT`), e como esta instância é
-    cacheada e compartilhada por TODAS as requisições do processo, isso
-    apagaria a identidade de `service_role` globalmente — a próxima chamada
-    administrativa (ex.: `auth.admin.get_user_by_id`) passaria a rodar com o
-    token de uma usuária qualquer e devolveria `403 User not allowed`. Use
-    `get_supabase_auth()` para essas três chamadas.
+    `.sign_out` neste cliente: autenticação é sempre feita por
+    `get_supabase_auth()`, mantendo o cliente administrativo com a service
+    key durante toda a requisição.
     """
     cfg = get_settings()
-    return create_client(cfg.supabase_url, cfg.supabase_service_key)
+    return _criar_cliente(cfg.supabase_url, cfg.supabase_service_key)
 
 
 def get_supabase_auth() -> Client:
@@ -34,7 +75,7 @@ def get_supabase_auth() -> Client:
     efeito colateral nenhum — o cliente morre no fim da requisição.
     """
     cfg = get_settings()
-    return create_client(cfg.supabase_url, cfg.supabase_anon_key)
+    return _criar_cliente(cfg.supabase_url, cfg.supabase_anon_key)
 
 
 def get_supabase_publico() -> Client:
@@ -44,20 +85,12 @@ def get_supabase_publico() -> Client:
     atende requisição sem sessão. As 3 RPCs desse módulo já são `security
     definer` e não dependem de `auth.uid()` (resolvem o salão pelo `slug`),
     então funcionam idênticas com a chave `anon` ou com a `service_role` —
-    mas usar aqui o cliente singleton de `get_supabase()` (service_role,
-    compartilhado por todo o processo) expõe cada requisição concorrente a
-    concorrência real dentro do MESMO `httpx.Client` interno. Observado na
-    prática (07/09/2026, testes automatizados de agendamento simultâneo): sob
-    duas requisições verdadeiramente concorrentes ao mesmo slug, o transporte
-    síncrono compartilhado pode estourar um erro de socket transitório que não
-    é um erro de negócio da RPC — e como a RPC não é seguramente re-chamável
-    depois de já ter rodado (a segunda tentativa veria o próprio agendamento
-    já criado e devolveria HORARIO_INDISPONIVEL para si mesma), não dá pra
-    resolver isso com retry. Um cliente descartável por requisição elimina o
-    compartilhamento e com ele a causa da colisão.
+    O cliente é descartável por requisição. Assim, chamadas públicas
+    concorrentes não compartilham o mesmo transporte síncrono e uma falha de
+    rede não contamina a requisição seguinte.
     """
     cfg = get_settings()
-    return create_client(cfg.supabase_url, cfg.supabase_anon_key)
+    return _criar_cliente(cfg.supabase_url, cfg.supabase_anon_key)
 
 
 from typing import Any, cast

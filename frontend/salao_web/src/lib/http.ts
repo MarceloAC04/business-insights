@@ -32,6 +32,10 @@ interface Opcoes {
   semToken?: boolean | undefined;
 }
 
+function ehFormulario(body: unknown): body is FormData {
+  return typeof FormData !== "undefined" && body instanceof FormData;
+}
+
 /**
  * Chamado quando o refresh falha e a sessão cai.
  *
@@ -101,7 +105,9 @@ async function executar<T>(metodo: Metodo, path: string, opcoes: Opcoes): Promis
   }
 
   const headers: Record<string, string> = { "Accept-Language": "pt-BR" };
-  if (opcoes.body !== undefined) headers["Content-Type"] = "application/json";
+  if (opcoes.body !== undefined && !ehFormulario(opcoes.body)) {
+    headers["Content-Type"] = "application/json";
+  }
   if (!opcoes.semToken) {
     const token = AppStorage.token;
     if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -112,7 +118,9 @@ async function executar<T>(metodo: Metodo, path: string, opcoes: Opcoes): Promis
     // `body` entra só quando existe: `fetch` recusa a chave presente com valor
     // `undefined` num GET.
     const init: RequestInit = { method: metodo, headers };
-    if (opcoes.body !== undefined) init.body = JSON.stringify(opcoes.body);
+    if (opcoes.body !== undefined) {
+      init.body = ehFormulario(opcoes.body) ? opcoes.body : JSON.stringify(opcoes.body);
+    }
     resposta = await fetch(montarUrl(path, opcoes.query), init);
   } catch {
     throw erroDeConexao();
@@ -171,6 +179,7 @@ export const AppApi = {
   get: <T>(path: string, query?: Query) => request<T>("GET", path, { query }),
   post: <T>(path: string, body?: unknown, query?: Query) =>
     request<T>("POST", path, { body, query }),
+  postArquivo: <T>(path: string, arquivo: FormData) => request<T>("POST", path, { body: arquivo }),
   put: <T>(path: string, body?: unknown) => request<T>("PUT", path, { body }),
   patch: <T>(path: string, body?: unknown) => request<T>("PATCH", path, { body }),
   delete: <T>(path: string, body?: unknown) => request<T>("DELETE", path, { body }),

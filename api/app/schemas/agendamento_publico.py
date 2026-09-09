@@ -6,11 +6,26 @@ from pydantic import BaseModel, Field
 class SalaoPublicoOut(BaseModel):
     nome: str
     foto_url: str | None = None
+    telefone_whatsapp: str = ""
+    instagram_url: str = ""
+    endereco: str = ""
+    descricao_publica: str = ""
+    horarios: list["HorarioPublicoOut"] = Field(default_factory=list)
+
+
+class HorarioPublicoOut(BaseModel):
+    dia_semana: int
+    ativo: bool
+    hora_inicio: str | None = None
+    hora_fim: str | None = None
+    hora_inicio_2: str | None = None
+    hora_fim_2: str | None = None
 
 
 class ServicoPublicoOut(BaseModel):
     id: str
     nome: str
+    categoria: str = "Outros"
     preco: float
     duracao_minutos: int
 

@@ -123,6 +123,8 @@ function rotear(
       return perfil(metodo, partes, query, body, path);
 
     case "servicos":
+      if (id === "categorias" && metodo === "GET") return db.getCategoriasServico();
+      if (id === "categorias" && metodo === "POST") return db.createCategoriaServico(body);
       if (metodo === "GET" && !id) return db.getServicos();
       if (metodo === "POST" && !id) return db.createServico(body);
       if (metodo === "PATCH") return db.editServico(id, body);

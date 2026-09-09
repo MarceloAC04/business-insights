@@ -6,6 +6,9 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Instagram,
+  MapPin,
+  MessageCircle,
   Pencil,
   Scissors,
   Sparkles,
@@ -30,7 +33,10 @@ export const Route = createFileRoute("/agendar/$slug")({
   head: () => ({
     meta: [
       { title: "Agendar horário" },
-      { name: "description", content: "Marque seu horário direto com o salão, sem precisar ligar." },
+      {
+        name: "description",
+        content: "Marque seu horário direto com o salão, sem precisar ligar.",
+      },
     ],
   }),
   component: AgendarPublicoPage,
@@ -47,6 +53,28 @@ function hojeISO(): string {
 function telefoneValido(telefone: string): boolean {
   return telefone.replace(/\D/g, "").length >= 10;
 }
+
+function linkWhatsApp(telefone: string): string | null {
+  const numero = telefone.replace(/\D/g, "");
+  return numero.length >= 10 ? `https://wa.me/${numero}` : null;
+}
+
+function linkInstagram(instagram: string): string | null {
+  const valor = instagram.trim();
+  if (!valor) return null;
+  if (/^https?:\/\//i.test(valor)) return valor;
+  const usuario = valor
+    .replace(/^@/, "")
+    .replace(/^instagram\.com\//i, "")
+    .trim();
+  return usuario ? `https://instagram.com/${encodeURIComponent(usuario)}` : null;
+}
+
+function mostrarHorario(inicio: string | null, fim: string | null): string | null {
+  return inicio && fim ? `${inicio.slice(0, 5)} às ${fim.slice(0, 5)}` : null;
+}
+
+const DIAS_SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
 type Etapa = 1 | 2 | 3;
 
@@ -118,12 +146,25 @@ function AgendarPublicoPage() {
   );
   const agendar = useAgendarPublico(slug);
 
-  const servicos = pagina?.servicos ?? [];
+  const servicos = useMemo(() => pagina?.servicos ?? [], [pagina?.servicos]);
   const servicosEscolhidos = useMemo(
     () => servicos.filter((s) => servicoIds.includes(s.id)),
     [servicos, servicoIds],
   );
   const precoTotal = servicosEscolhidos.reduce((t, s) => t + s.preco, 0);
+  const servicosPorCategoria = useMemo(() => {
+    const grupos = new Map<string, typeof servicos>();
+    servicos.forEach((servico) => {
+      const categoria = servico.categoria?.trim() || "Outros";
+      grupos.set(categoria, [...(grupos.get(categoria) ?? []), servico]);
+    });
+    return [...grupos.entries()];
+  }, [servicos]);
+  const whatsapp = linkWhatsApp(pagina?.salao.telefone_whatsapp ?? "");
+  const instagram = linkInstagram(pagina?.salao.instagram_url ?? "");
+  const mapa = pagina?.salao.endereco.trim()
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pagina.salao.endereco)}`
+    : null;
 
   const irPara = (destino: Etapa) => {
     setDirecao(destino > etapa ? "avancar" : "voltar");
@@ -198,15 +239,86 @@ function AgendarPublicoPage() {
 
   return (
     <div className="mx-auto min-h-screen max-w-lg px-5 py-8 pb-10">
-      <div className="mb-6 flex items-center gap-3">
-        <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-brand-gradient text-primary-foreground shadow-glow">
-          <Sparkles className="size-5" />
-        </span>
-        <div className="min-w-0">
-          <h1 className="truncate font-display text-lg font-semibold">{pagina.salao.nome}</h1>
-          <p className="text-xs text-muted-foreground">Agendar horário online</p>
+      <section className="mb-6 overflow-hidden rounded-2xl border border-border bg-surface shadow-soft">
+        <div className="flex items-center gap-3 p-4">
+          {pagina.salao.foto_url ? (
+            <img
+              src={pagina.salao.foto_url}
+              alt={`Foto de ${pagina.salao.nome}`}
+              className="size-14 shrink-0 rounded-2xl border border-primary-mid/50 object-cover"
+            />
+          ) : (
+            <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-brand-gradient text-primary-foreground shadow-glow">
+              <Sparkles className="size-6" />
+            </span>
+          )}
+          <div className="min-w-0">
+            <h1 className="truncate font-display text-lg font-semibold">{pagina.salao.nome}</h1>
+            <p className="text-xs text-muted-foreground">Agendar horário online</p>
+            {pagina.salao.descricao_publica ? (
+              <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                {pagina.salao.descricao_publica}
+              </p>
+            ) : null}
+          </div>
         </div>
-      </div>
+
+        {whatsapp || instagram || mapa ? (
+          <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
+            {whatsapp ? (
+              <Button asChild size="sm" variant="outline">
+                <a href={whatsapp} target="_blank" rel="noreferrer">
+                  <MessageCircle className="size-4" />
+                  WhatsApp
+                </a>
+              </Button>
+            ) : null}
+            {instagram ? (
+              <Button asChild size="sm" variant="outline">
+                <a href={instagram} target="_blank" rel="noreferrer">
+                  <Instagram className="size-4" />
+                  Instagram
+                </a>
+              </Button>
+            ) : null}
+            {mapa ? (
+              <Button asChild size="sm" variant="outline">
+                <a href={mapa} target="_blank" rel="noreferrer">
+                  <MapPin className="size-4" />
+                  Como chegar
+                </a>
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {(pagina.salao.horarios ?? []).length ? (
+          <details className="border-t border-border px-4 py-3">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-medium">
+              <Clock className="size-4 text-primary" />
+              Ver expediente
+            </summary>
+            <ul className="mt-3 space-y-1.5 text-xs text-muted-foreground">
+              {(pagina.salao.horarios ?? []).map((dia) => {
+                const primeiroTurno = mostrarHorario(dia.hora_inicio, dia.hora_fim);
+                const segundoTurno = mostrarHorario(dia.hora_inicio_2, dia.hora_fim_2);
+                return (
+                  <li key={dia.dia_semana} className="flex items-center justify-between gap-3">
+                    <span className="font-medium text-foreground">
+                      {DIAS_SEMANA[dia.dia_semana]}
+                    </span>
+                    <span>
+                      {dia.ativo && primeiroTurno
+                        ? [primeiroTurno, segundoTurno].filter(Boolean).join(" · ")
+                        : "Fechado"}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        ) : null}
+      </section>
 
       <EtapasIndicador atual={etapa} />
 
@@ -282,25 +394,34 @@ function AgendarPublicoPage() {
 
             <SectionTitle hint="Selecione um ou mais">Serviços</SectionTitle>
             {servicos.length ? (
-              <ul className="space-y-2">
-                {servicos.map((s) => (
-                  <li key={s.id}>
-                    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface p-3">
-                      <span className="flex min-w-0 items-center gap-2.5">
-                        <Checkbox
-                          checked={servicoIds.includes(s.id)}
-                          onCheckedChange={() => alternarServico(s.id)}
-                        />
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium">{s.nome}</span>
-                          <span className="text-xs text-muted-foreground">{s.duracao_minutos} min</span>
-                        </span>
-                      </span>
-                      <Money value={s.preco} className="shrink-0" />
-                    </label>
-                  </li>
+              <div className="space-y-4">
+                {servicosPorCategoria.map(([categoria, servicosDaCategoria]) => (
+                  <section key={categoria} aria-label={`Categoria ${categoria}`}>
+                    <h3 className="mb-2 text-sm font-semibold text-primary-dark">{categoria}</h3>
+                    <ul className="space-y-2">
+                      {servicosDaCategoria.map((s) => (
+                        <li key={s.id}>
+                          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface p-3">
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <Checkbox
+                                checked={servicoIds.includes(s.id)}
+                                onCheckedChange={() => alternarServico(s.id)}
+                              />
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-medium">{s.nome}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  {s.duracao_minutos} min
+                                </span>
+                              </span>
+                            </span>
+                            <Money value={s.preco} className="shrink-0" />
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
                 ))}
-              </ul>
+              </div>
             ) : (
               <EmptyState
                 icon={<Scissors className="size-5" />}
@@ -311,7 +432,9 @@ function AgendarPublicoPage() {
 
             {servicoIds.length > 0 ? (
               <div className="mt-6 animate-in fade-in duration-300">
-                <SectionTitle hint="Só aparecem horários realmente livres">Data e horário</SectionTitle>
+                <SectionTitle hint="Só aparecem horários realmente livres">
+                  Data e horário
+                </SectionTitle>
                 <div className="space-y-1.5">
                   <Label htmlFor="data-agendamento">Data</Label>
                   <Input
@@ -362,11 +485,7 @@ function AgendarPublicoPage() {
             ) : null}
 
             <div className="mt-6 flex gap-3">
-              <Button
-                variant="outline"
-                className="h-12 rounded-xl px-4"
-                onClick={() => irPara(1)}
-              >
+              <Button variant="outline" className="h-12 rounded-xl px-4" onClick={() => irPara(1)}>
                 <ArrowLeft className="size-4" />
               </Button>
               <Button
@@ -404,7 +523,9 @@ function AgendarPublicoPage() {
                 className="w-full rounded-xl border border-border bg-surface p-3 text-left"
               >
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-sm font-medium">{formatDate(data)} às {horario}</span>
+                  <span className="text-sm font-medium">
+                    {formatDate(data)} às {horario}
+                  </span>
                   <Pencil className="size-3.5 shrink-0 text-muted-foreground" />
                 </div>
                 <ul className="space-y-1">

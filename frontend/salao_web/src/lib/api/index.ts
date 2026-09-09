@@ -27,5 +27,5 @@ export type { Precificacao, PrecificacaoBody } from "./resumo";
 export type { ItemBody, MovimentacaoBody } from "./estoque";
 export type { KitBody } from "./kits";
 export type { CustoFixoBody, PerfilBody } from "./perfil";
-export type { ServicoBody } from "./servicos";
+export type { CategoriaServicoBody, ServicoBody } from "./servicos";
 export type { AgendarBody } from "./agendamento-publico";
