@@ -20,7 +20,9 @@ from app.schemas.alertas import (
 )
 from app.services.estoque_rendimento import (
     e_rendimento,
+    nome_unidade,
     quantidade_consumo_disponivel,
+    rotulo_quantidade,
     unidade_consumo,
 )
 
@@ -85,15 +87,15 @@ def _sincronizar_alertas_estoque(supabase: Client, user_id: str) -> None:
         if saldo < 0:
             tipo, severidade = "estoque_negativo", "critico"
             titulo = f"Estoque negativo: {item['nome']}"
-            mensagem = f"Há {abs(saldo):g} {unidade}(s) registrados sem saldo em {item['nome']}."
+            mensagem = f"Há {rotulo_quantidade(abs(saldo), unidade)} {'registrado' if abs(saldo) == 1 else 'registrados'} sem saldo em {item['nome']}."
         elif saldo == 0:
             tipo, severidade = "estoque_critico", "critico"
-            titulo = f"Sem {unidade}(s) disponíveis: {item['nome']}"
-            mensagem = f"{item['nome']} não tem mais {unidade}(s) disponíveis."
+            titulo = f"Sem {nome_unidade(0, unidade)} disponíveis: {item['nome']}"
+            mensagem = f"{item['nome']} não tem mais {nome_unidade(0, unidade)} disponíveis."
         elif saldo <= limite:
             tipo, severidade = "estoque_baixo", "alerta"
-            titulo = f"Poucos {unidade}(s) disponíveis: {item['nome']}"
-            mensagem = f"Restam {saldo:g} {unidade}(s) de {item['nome']}; o aviso está em {limite:g}."
+            titulo = f"Poucos {nome_unidade(0, unidade)} disponíveis: {item['nome']}"
+            mensagem = f"Restam {rotulo_quantidade(saldo, unidade)} de {item['nome']}; o aviso está em {rotulo_quantidade(limite, unidade)}."
         else:
             tipo = None
 

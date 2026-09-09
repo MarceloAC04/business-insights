@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from app.schemas.limites import LIMITE_VALOR_INPUT
 from typing import Optional
 
 
@@ -87,10 +88,13 @@ class FiltroPrecificacao(BaseModel):
     Dados necessários para calcular o preço mínimo de um serviço.
     O Flutter envia isso quando a usuária quer saber se está cobrindo os custos.
     """
-    custo_material: float = Field(..., ge=0, description="Custo dos materiais usados no serviço (R$)")
+    custo_material: float = Field(
+        ..., ge=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False,
+        description="Custo dos materiais usados no serviço (R$)",
+    )
     tempo_minutos: int = Field(..., ge=1, description="Duração do serviço em minutos")
     meta_hora: float = Field(
-        ..., ge=0,
+        ..., ge=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False,
         description="Quanto a proprietária quer ganhar por hora de trabalho (R$)"
     )
     percentual_overhead: float = Field(

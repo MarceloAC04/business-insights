@@ -770,6 +770,18 @@ export class DemoDatabase {
     return this.vazio();
   }
 
+  private registrarGastoDeEstoque(nomeItem: string, valor: number, motivo = ""): void {
+    if (!Number.isFinite(valor) || valor <= 0) return;
+    const motivoLimpo = motivo.trim();
+    this.createGasto({
+      nome: motivoLimpo ? `${motivoLimpo} — ${nomeItem}` : `Entrada de estoque — ${nomeItem}`,
+      valor,
+      prazo_pagamento: paraDataApi(hoje()),
+      forma_pagamento: "a_vista",
+      categoria: "material",
+    });
+  }
+
   // ── estoque ────────────────────────────────────────────────────────────────
 
   private planejamentoReposicao(itens: ItemEstoque[]): PlanejamentoReposicao[] {
@@ -900,6 +912,7 @@ export class DemoDatabase {
     }
     this.itens.push(item);
     if (quantidade > 0) this.movimentar(item, "entrada", quantidade, "Cadastro do item");
+    this.registrarGastoDeEstoque(texto(body, "nome"), custo * quantidade);
     return this.vazio();
   }
 
@@ -1002,6 +1015,13 @@ export class DemoDatabase {
       null,
       tipo === "ajuste" ? saldo : null,
     );
+    if (tipo === "entrada") {
+      this.registrarGastoDeEstoque(
+        item.nome,
+        custoUnitario === null ? 0 : custoUnitario * quantidade,
+        texto(body, "motivo"),
+      );
+    }
     return this.vazio();
   }
 

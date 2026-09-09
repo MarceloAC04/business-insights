@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from typing import Literal
 from pydantic import BaseModel, Field
+from app.schemas.limites import LIMITE_VALOR_INPUT
 
 
 FormaPagamento = Literal["a_vista", "credito", "debito", "pix"]
@@ -11,12 +12,12 @@ CategoriaGasto = Literal["fixo", "material", "outros"]
 
 class GastoItem(BaseModel):
     nome: str
-    preco: float = Field(ge=0)
+    preco: float = Field(ge=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
 
 
 class GastoIn(BaseModel):
     nome: str = Field(min_length=1)
-    valor: float = Field(gt=0)
+    valor: float = Field(gt=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
     prazo_pagamento: date
     forma_pagamento: FormaPagamento = "a_vista"
     categoria: CategoriaGasto = "outros"
@@ -27,7 +28,7 @@ class GastoIn(BaseModel):
 
 class GastoPatchIn(BaseModel):
     nome: str | None = Field(default=None, min_length=1)
-    valor: float | None = Field(default=None, gt=0)
+    valor: float | None = Field(default=None, gt=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
     prazo_pagamento: date | None = None
     forma_pagamento: FormaPagamento | None = None
     categoria: CategoriaGasto | None = None

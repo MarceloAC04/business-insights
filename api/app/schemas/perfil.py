@@ -3,6 +3,7 @@
 from datetime import time as time_, datetime
 import re
 from pydantic import BaseModel, Field, field_validator, model_validator
+from app.schemas.limites import LIMITE_VALOR_INPUT
 
 
 # ── Perfil do Salão ──────────────────────────────────────────────────
@@ -35,20 +36,22 @@ class PerfilUpdateIn(BaseModel):
     instagram_url: str = Field(default="", max_length=200)
     endereco: str = Field(default="", max_length=300)
     descricao_publica: str = Field(default="", max_length=500)
-    meta_faturamento_mensal: float = Field(ge=0, default=9000.0)
+    meta_faturamento_mensal: float = Field(
+        ge=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False, default=9000.0
+    )
 
 
 # ── Custos Fixos ─────────────────────────────────────────────────────
 
 class CustoFixoIn(BaseModel):
     descricao: str = Field(min_length=1)
-    valor: float = Field(gt=0)
+    valor: float = Field(gt=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
     dia_vencimento: int = Field(ge=1, le=31)
 
 
 class CustoFixoPatchIn(BaseModel):
     descricao: str | None = Field(default=None, min_length=1)
-    valor: float | None = Field(default=None, gt=0)
+    valor: float | None = Field(default=None, gt=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
     dia_vencimento: int | None = Field(default=None, ge=1, le=31)
 
 

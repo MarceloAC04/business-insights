@@ -1,6 +1,6 @@
 # Mapa de endpoints — FastAPI
 
-Especificação do backend que o app Flutter consome. Consequência da **decisão A1**
+Especificação do backend que o frontend React consome. Consequência da **decisão A1**
 ([CLAUDE.md](../CLAUDE.md)): o FastAPI é o **único** backend que o app enxerga. O
 Supabase é detalhe de implementação dele — o Flutter não fala PostgREST, não fala RPC,
 não carrega `anon key`.
@@ -77,6 +77,7 @@ aceita `user_id` no corpo ou na query — se aceitar e confiar, é falha de serv
 - Datas: ISO-8601. `date` puro (`2026-06-03`) para prazo; `datetime` com timezone para
   registro (`2026-06-03T14:30:00-03:00`).
 - Dinheiro: `number` em reais com 2 casas (`180.00`). Nunca string, nunca centavos int.
+  Todo campo de valor recebido em input aceita no máximo `1000000.00`.
 - Identificadores: `uuid` string.
 - Enums: **string**, nunca int (reordenar enum não pode ser quebra silenciosa).
 - Paginação: `?pagina=1&tamanho=50` onde indicado; `total` no envelope é o total geral,
@@ -581,6 +582,12 @@ histórico de custo dos atendimentos.
 obrigatoriamente `un` e o saldo começa no próprio cadastro; não há abertura de pote.
 Campos ou modos legados de duração retornam `422`.
 
+Ao cadastrar um item com saldo inicial maior que zero, o servidor calcula automaticamente
+o gasto como `custo_unitario × quantidade_atual` e cria um lançamento da categoria
+`material`, com vencimento no dia da entrada e forma de pagamento `a_vista`. O lançamento
+nasce pendente, como os demais gastos, e pode ser marcado como pago na tela de Gastos.
+Se o custo unitário ou a quantidade resultar em zero, não cria gasto.
+
 Ao editar um produto, saldo e custo não mudam: a tela usa conferência ou entrada para
 isso, preservando o histórico. A mudança de `quantidade` para `rendimento_usos` só é
 aceita para itens que já estão contados em `un`. Em ml, gramas ou caixas, o cliente
@@ -607,6 +614,10 @@ atualizados.
   e maior ou igual a zero, nunca um incremento. Saldo 6 + contagem 4 resulta
   em 4; contagem 0 resulta em 0. Não altera custo.
 - `custo_unitario`, quando informado, deve ser finito e não negativo.
+- Em uma `entrada`, quando `custo_unitario` for informado, o servidor calcula o gasto
+  automaticamente como `custo_unitario × quantidade` e cria um lançamento de `material`
+  com a descrição baseada no produto e no motivo da entrada. O lançamento nasce pendente
+  e usa a data atual como prazo. `saida` e `ajuste` não geram gasto.
 - A conferência grava saldo e histórico na mesma transação, com o dono derivado
   da sessão. A migração `011_conferencia_estoque.sql` deve preceder o backend.
   Ela não modifica o RPC incremental usado por atendimentos, kits e estornos.

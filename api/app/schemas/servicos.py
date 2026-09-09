@@ -1,6 +1,7 @@
 """Schemas de `servicos` (endpoints-backend.md §8)."""
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from app.schemas.limites import LIMITE_VALOR_INPUT
 
 
 class ProdutoPadraoIn(BaseModel):
@@ -18,7 +19,7 @@ class ProdutoPadraoIn(BaseModel):
 class ServicoIn(BaseModel):
     nome: str
     categoria: str = Field(default="Outros", max_length=60)
-    preco: float
+    preco: float = Field(le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
     duracao_minutos: int
     produtos_padrao: list[ProdutoPadraoIn] = []
 
@@ -43,7 +44,7 @@ class ServicoIn(BaseModel):
 class ServicoPatchIn(BaseModel):
     nome: str | None = None
     categoria: str | None = Field(default=None, max_length=60)
-    preco: float | None = None
+    preco: float | None = Field(default=None, le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
     duracao_minutos: int | None = None
     produtos_padrao: list[ProdutoPadraoIn] | None = None
 

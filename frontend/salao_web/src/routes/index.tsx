@@ -4,6 +4,8 @@ import {
   ArrowUpRight,
   CalendarPlus,
   Crown,
+  Eye,
+  EyeOff,
   Lightbulb,
   Package,
   Receipt,
@@ -42,7 +44,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatBRL, formatDate, formatPercent, MESES, nomeMes } from "@/lib/format";
+import { formatBRL, formatDate, formatPercent, MESES, nomeMes, pluralizar } from "@/lib/format";
 import { textoDoErro, useEstoque, useGastos, useResumo, useSessao } from "@/lib/queries";
 
 export const Route = createFileRoute("/")({
@@ -67,6 +69,7 @@ export const Route = createFileRoute("/")({
 const hoje = new Date();
 const anoAtual = hoje.getFullYear();
 const mesAtual = hoje.getMonth() + 1;
+const VALOR_OCULTO = "••••";
 
 /** Rótulo curto do eixo do gráfico: "Set/26". */
 function rotuloDoPonto(ano: number, mes: number): string {
@@ -77,6 +80,7 @@ function ResumoPage() {
   const navigate = useNavigate();
   const [mes, setMes] = useState(mesAtual);
   const [ano, setAno] = useState(anoAtual);
+  const [mostrarValores, setMostrarValores] = useState(true);
 
   // Recharts mede o container no cliente: no SSR o gráfico sairia com 0px.
   const [montado, setMontado] = useState(false);
@@ -147,10 +151,14 @@ function ResumoPage() {
     }
     if (resumo.receita.quantidade_kits_vendidos > 0) {
       insights.push(
-        `Você vendeu ${resumo.receita.quantidade_kits_vendidos} kits, somando ${formatBRL(resumo.receita.total_kits)}.`,
+        `Você vendeu ${resumo.receita.quantidade_kits_vendidos} ${pluralizar(resumo.receita.quantidade_kits_vendidos, "kit")}, somando ${formatBRL(resumo.receita.total_kits)}.`,
       );
     }
-    if (baixos.length) insights.push(`${baixos.length} produtos precisam de reposição.`);
+    if (baixos.length) {
+      insights.push(
+        `${baixos.length} ${pluralizar(baixos.length, "produto")} ${baixos.length === 1 ? "precisa" : "precisam"} de reposição.`,
+      );
+    }
     if (metaProgresso < 80 && resumo.meta_faturamento_mensal > 0) {
       insights.push(
         `Você alcançou ${formatPercent(metaProgresso)} da meta de faturamento de ${formatBRL(resumo.meta_faturamento_mensal)}.`,
@@ -191,6 +199,17 @@ function ResumoPage() {
             ))}
           </SelectContent>
         </Select>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-11 w-11 rounded-xl"
+          title={mostrarValores ? "Ocultar valores financeiros" : "Mostrar valores financeiros"}
+          aria-label={mostrarValores ? "Ocultar valores financeiros" : "Mostrar valores financeiros"}
+          onClick={() => setMostrarValores((visivel) => !visivel)}
+        >
+          {mostrarValores ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+        </Button>
       </div>
 
       {isPending ? (
@@ -206,7 +225,7 @@ function ResumoPage() {
           {/* Lucro em destaque */}
           <StatCard
             label={resumo.saldo_final >= 0 ? "Lucro do mês" : "Prejuízo do mês"}
-            value={formatBRL(resumo.saldo_final)}
+            value={mostrarValores ? formatBRL(resumo.saldo_final) : VALOR_OCULTO}
             destaque
             tone={resumo.saldo_final >= 0 ? "positive" : "negative"}
             icon={
@@ -217,7 +236,9 @@ function ResumoPage() {
               )
             }
             hint={
-              temAnterior
+              !mostrarValores
+                ? "Valores financeiros ocultos"
+                : temAnterior
                 ? `${variacao >= 0 ? "+" : "-"}${formatPercent(Math.abs(variacao))} em relação a ${nomeMes(mesAnterior)}`
                 : "Sem comparação com o mês anterior"
             }
@@ -226,22 +247,22 @@ function ResumoPage() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <StatCard
               label="Faturamento"
-              value={formatBRL(resumo.entrou)}
+              value={mostrarValores ? formatBRL(resumo.entrou) : VALOR_OCULTO}
               icon={<Wallet className="size-4" />}
             />
             <StatCard
               label="Gastos"
-              value={formatBRL(resumo.saiu)}
+              value={mostrarValores ? formatBRL(resumo.saiu) : VALOR_OCULTO}
               icon={<Receipt className="size-4" />}
             />
             <StatCard
               label="Margem de lucro"
-              value={formatPercent(resumo.insights.margem_lucro_percentual, 1)}
+              value={mostrarValores ? formatPercent(resumo.insights.margem_lucro_percentual, 1) : VALOR_OCULTO}
               icon={<Target className="size-4" />}
             />
             <StatCard
               label="Ticket médio"
-              value={formatBRL(resumo.insights.ticket_medio)}
+              value={mostrarValores ? formatBRL(resumo.insights.ticket_medio) : VALOR_OCULTO}
               icon={<ArrowUpRight className="size-4" />}
             />
             <StatCard
@@ -280,7 +301,11 @@ function ResumoPage() {
           <Card className="p-4">
             <SectionTitle hint="Últimos 6 meses">Receitas e despesas</SectionTitle>
             <div className="h-64 w-full">
-              {montado ? (
+              {!mostrarValores ? (
+                <div className="grid h-full place-items-center rounded-xl bg-surface-2 text-sm text-muted-foreground">
+                  Valores financeiros ocultos
+                </div>
+              ) : montado ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={serie} margin={{ top: 8, right: 4, bottom: 0, left: -18 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -327,7 +352,8 @@ function ResumoPage() {
                       <div className="min-w-0">
                         <p className="truncate font-semibold">{melhor.nome}</p>
                         <p className="text-xs text-muted-foreground">
-                          {melhor.quantidade} atendimentos • lucro de <Money value={melhor.lucro} />
+                          {melhor.quantidade} {pluralizar(melhor.quantidade, "atendimento")} • lucro de{" "}
+                          {mostrarValores ? <Money value={melhor.lucro} /> : VALOR_OCULTO}
                         </p>
                       </div>
                     </div>
@@ -337,7 +363,7 @@ function ResumoPage() {
                         className="flex items-center justify-between gap-3 border-t border-border pt-2 text-sm"
                       >
                         <span className="min-w-0 truncate text-muted-foreground">{s.nome}</span>
-                        <Money value={s.lucro} colorir />
+                        {mostrarValores ? <Money value={s.lucro} colorir /> : <span>{VALOR_OCULTO}</span>}
                       </div>
                     ))}
                   </div>
@@ -351,7 +377,11 @@ function ResumoPage() {
 
               <Card className="p-4">
                 <SectionTitle hint="Gerado a partir dos seus números">Para você saber</SectionTitle>
-                {insights.length ? (
+                {!mostrarValores ? (
+                  <p className="text-sm text-muted-foreground">
+                    Valores financeiros ocultos. Toque no olho para visualizar.
+                  </p>
+                ) : insights.length ? (
                   <ul className="space-y-2">
                     {insights.map((texto) => (
                       <li key={texto} className="flex items-start gap-2.5 text-sm">
@@ -391,7 +421,11 @@ function ResumoPage() {
                           </p>
                         </div>
                         <div className="shrink-0 text-right">
-                          <Money value={g.valor} className="text-sm" />
+                          {mostrarValores ? (
+                            <Money value={g.valor} className="text-sm" />
+                          ) : (
+                            <span className="text-sm font-semibold">{VALOR_OCULTO}</span>
+                          )}
                           <div className="mt-1">
                             <Pill tone={g.vence_em_dias < 0 ? "negative" : "warning"}>
                               {g.vence_em_dias < 0 ? "Vencido" : "Pendente"}

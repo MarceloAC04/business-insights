@@ -38,10 +38,8 @@ function emHorario(minutos: number): string {
 
 export function AgendamentoScreen() {
   const { data: horarioServidor, isPending: carregandoHorario } = useHorarioFuncionamento();
-  const { data: link, isPending: carregandoLink } = useLinkAgendamento();
   const salvarHorario = useSalvarHorarioFuncionamento();
   const [horarios, setHorarios] = useState<HorarioDia[]>(horariosPadrao());
-  const [linkCopiado, setLinkCopiado] = useState(false);
 
   useEffect(() => {
     if (horarioServidor?.horarios.length) setHorarios(horarioServidor.horarios);
@@ -103,34 +101,8 @@ export function AgendamentoScreen() {
     });
   };
 
-  const copiarLink = () => {
-    if (!link) return;
-    navigator.clipboard.writeText(link.url).then(() => {
-      setLinkCopiado(true);
-      setTimeout(() => setLinkCopiado(false), 2000);
-    });
-  };
-
   return (
     <section className="space-y-4">
-      <Card className="p-4">
-        <SectionTitle hint="Link fixo — não expira, envie uma vez só">
-          Link para o cliente agendar
-        </SectionTitle>
-        {carregandoLink ? (
-          <ListSkeleton linhas={1} />
-        ) : link ? (
-          <div className="flex items-center gap-2 rounded-xl border border-border bg-surface-2 p-3">
-            <Link2 className="size-4 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate text-sm">{link.url}</span>
-            <Button size="sm" variant="outline" onClick={copiarLink}>
-              {linkCopiado ? <Check className="size-4" /> : <Copy className="size-4" />}
-              {linkCopiado ? "Copiado" : "Copiar"}
-            </Button>
-          </div>
-        ) : null}
-      </Card>
-
       <Card className="p-4">
         <SectionTitle hint="Defina manhã e tarde quando houver pausa; só esses horários aparecem para a cliente">
           Horário de funcionamento
@@ -229,5 +201,51 @@ export function AgendamentoScreen() {
         )}
       </Card>
     </section>
+  );
+}
+
+export function LinkAgendamentoCard() {
+  return (
+    <Card className="p-4">
+      <SectionTitle hint="Link fixo — não expira, envie uma vez só">
+        Link para o cliente agendar
+      </SectionTitle>
+      <LinkAgendamentoCompacto />
+    </Card>
+  );
+}
+
+export function LinkAgendamentoCompacto() {
+  const { data: link, isPending: carregandoLink } = useLinkAgendamento();
+  const [linkCopiado, setLinkCopiado] = useState(false);
+
+  const copiarLink = () => {
+    if (!link) return;
+    navigator.clipboard.writeText(link.url).then(() => {
+      setLinkCopiado(true);
+      setTimeout(() => setLinkCopiado(false), 2000);
+    });
+  };
+
+  if (carregandoLink) {
+    return <div className="h-11 w-full animate-pulse rounded-xl bg-muted" aria-busy="true" />;
+  }
+  if (!link) return null;
+
+  return (
+    <div className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2.5">
+      <Link2 className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-xs sm:text-sm">{link.url}</span>
+      <Button
+        size="sm"
+        variant="outline"
+        className="shrink-0 px-2 sm:px-3"
+        aria-label={linkCopiado ? "Link copiado" : "Copiar link de agendamento"}
+        onClick={copiarLink}
+      >
+        {linkCopiado ? <Check className="size-4" /> : <Copy className="size-4" />}
+        <span className="hidden sm:inline">{linkCopiado ? "Copiado" : "Copiar"}</span>
+      </Button>
+    </div>
   );
 }

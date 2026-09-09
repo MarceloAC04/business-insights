@@ -72,6 +72,10 @@ export function formatHora(value: string): string {
   );
 }
 
+/** Teto comum para qualquer valor monetário digitado no sistema. */
+export const LIMITE_VALOR_INPUT = 1_000_000;
+const LIMITE_VALOR_CENTAVOS = "100000000";
+
 /**
  * Máscara de valor em reais, digitando como centavos (padrão de app de banco):
  * cada dígito novo entra pela direita — "1234" vira "12,34", "500" vira "5,00".
@@ -81,7 +85,12 @@ export function formatHora(value: string): string {
 export function formatMoedaInput(value: string): string {
   const digitos = value.replace(/\D/g, "").replace(/^0+(?=\d)/, "");
   if (digitos.length === 0) return "";
-  const centavos = digitos.padStart(3, "0");
+  const digitosLimitados =
+    digitos.length > LIMITE_VALOR_CENTAVOS.length ||
+    (digitos.length === LIMITE_VALOR_CENTAVOS.length && digitos > LIMITE_VALOR_CENTAVOS)
+      ? LIMITE_VALOR_CENTAVOS
+      : digitos;
+  const centavos = digitosLimitados.padStart(3, "0");
   const inteiro = centavos.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   const decimal = centavos.slice(-2);
   return `${inteiro},${decimal}`;
@@ -92,6 +101,18 @@ export function parseMoedaInput(value: string): number {
   if (value.trim() === "") return 0;
   const numero = Number(value.replace(/\./g, "").replace(",", "."));
   return Number.isFinite(numero) ? numero : 0;
+}
+
+/** Escolhe o rótulo correto para uma quantidade: 1 produto, 2 produtos. */
+export function pluralizar(quantidade: number, singular: string, plural?: string): string {
+  if (quantidade === 1) return singular;
+  if (plural) return plural;
+
+  const pluraisIrregulares: Record<string, string> = {
+    embalagem: "embalagens",
+    mês: "meses",
+  };
+  return pluraisIrregulares[singular] ?? `${singular}s`;
 }
 
 /**

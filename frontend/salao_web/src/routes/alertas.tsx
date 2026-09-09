@@ -22,7 +22,7 @@ import {
 } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatDate } from "@/lib/format";
+import { formatDate, pluralizar } from "@/lib/format";
 import {
   textoDoErro,
   useAlertas,
@@ -81,7 +81,10 @@ function AlertasPage() {
   const naoLidos = data?.total_nao_lidos ?? 0;
 
   return (
-    <AppShell titulo="Alertas" subtitulo={`${naoLidos} avisos não lidos`}>
+    <AppShell
+      titulo="Alertas"
+      subtitulo={`${naoLidos} ${pluralizar(naoLidos, "aviso")} ${naoLidos === 1 ? "não lido" : "não lidos"}`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Tabs value={filtro} onValueChange={(v) => setFiltro(v as typeof filtro)}>
           <TabsList className="h-11 rounded-xl">

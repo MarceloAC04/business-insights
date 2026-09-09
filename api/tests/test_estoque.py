@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from app.main import app
 from app.core.security import usuario_atual
 from app.core.supabase_client import get_supabase
-from app.schemas.estoque import ItemIn
+from app.schemas.estoque import ItemIn, MovimentacaoIn
 from app.services import estoque_service
 
 
@@ -26,6 +26,117 @@ def client():
 
 
 class TestEstoqueEndpoints:
+    def test_cadastrar_item_calcula_gasto_por_custo_e_quantidade(self, monkeypatch):
+        gasto = MagicMock()
+        monkeypatch.setattr(estoque_service.gastos_service, "criar_gasto", gasto)
+
+        item = {
+            "id": TEST_ITEM_ID,
+            "nome": "Creme produzido",
+            "unidade": "un",
+            "categoria": "outro",
+            "quantidade_atual": 2.0,
+            "quantidade_minima": 1.0,
+            "custo_medio": 12.0,
+            "custo_ultima_compra": 12.0,
+            "status": "ok",
+            "deficit": 0.0,
+            "ativo": True,
+            "codigo_barras": None,
+        }
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.insert.return_value = mock_table
+        mock_table.execute.side_effect = [
+            MagicMock(data=[{"id": TEST_ITEM_ID}]),
+            MagicMock(data=[item]),
+        ]
+        mock_sb.table.return_value = mock_table
+
+        estoque_service.criar(
+            mock_sb,
+            TEST_USER_ID,
+            ItemIn(
+                nome="Creme produzido",
+                unidade="un",
+                categoria="outro",
+                quantidade_atual=2,
+                custo_unitario=12,
+            ),
+        )
+
+        gasto.assert_called_once()
+        gasto_body = gasto.call_args.args[2]
+        assert gasto_body.nome == "Entrada de estoque — Creme produzido"
+        assert gasto_body.valor == 24
+        assert gasto_body.categoria == "material"
+
+    def test_entrada_calcula_gasto_por_custo_e_quantidade(self, monkeypatch):
+        gasto = MagicMock()
+        monkeypatch.setattr(estoque_service.gastos_service, "criar_gasto", gasto)
+
+        item_inicial = {
+            "id": TEST_ITEM_ID,
+            "nome": "Creme produzido",
+            "unidade": "un",
+            "categoria": "outro",
+            "quantidade_atual": 2.0,
+            "quantidade_minima": 1.0,
+            "custo_medio": 12.0,
+            "custo_ultima_compra": 12.0,
+            "status": "ok",
+            "deficit": 0.0,
+            "ativo": True,
+            "codigo_barras": None,
+        }
+        mock_sb = MagicMock()
+        mock_table = MagicMock()
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.insert.return_value = mock_table
+        mock_table.update.return_value = mock_table
+        mock_table.execute.side_effect = [
+            MagicMock(data=[item_inicial]),
+            MagicMock(data=[]),
+            MagicMock(data=[{**item_inicial, "quantidade_atual": 4.0}]),
+        ]
+        mock_sb.table.return_value = mock_table
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"quantidade_atual": 4.0}]
+        )
+
+        estoque_service.criar_movimentacao(
+            mock_sb,
+            TEST_USER_ID,
+            TEST_ITEM_ID,
+            MovimentacaoIn(
+                tipo="entrada",
+                quantidade=2,
+                motivo="Produção própria",
+                custo_unitario=12,
+            ),
+        )
+
+        gasto.assert_called_once()
+        gasto_body = gasto.call_args.args[2]
+        assert gasto_body.nome == "Produção própria — Creme produzido"
+        assert gasto_body.valor == 24
+
+    def test_valor_gasto_nao_faz_parte_do_contrato(self):
+        with pytest.raises(ValidationError):
+            MovimentacaoIn(tipo="saida", quantidade=1, valor_gasto=10)
+        with pytest.raises(ValidationError):
+            ItemIn(
+                nome="Creme",
+                unidade="un",
+                categoria="outro",
+                quantidade_atual=1,
+                custo_unitario=10,
+                valor_gasto=10,
+            )
+
     def test_historico_preserva_zero_e_nao_reinterpreta_ajuste_antigo(self, client):
         sb = MagicMock()
         table = sb.table.return_value
@@ -153,7 +264,10 @@ class TestEstoqueEndpoints:
             app.dependency_overrides.clear()
 
 
-    def test_criar_movimentacao_entrada_recalcula_custo_medio(self, client):
+    def test_criar_movimentacao_entrada_recalcula_custo_medio(self, client, monkeypatch):
+        gasto = MagicMock()
+        monkeypatch.setattr(estoque_service.gastos_service, "criar_gasto", gasto)
+
         mock_sb = MagicMock()
         mock_table = MagicMock()
         mock_table.select.return_value = mock_table
@@ -214,6 +328,8 @@ class TestEstoqueEndpoints:
             assert data["result"]["quantidade_atual"] == 4.0
             assert data["result"]["custo_medio"] == 25.0
             assert data["result"]["custo_ultima_compra"] == 30.0
+            gasto_body = gasto.call_args.args[2]
+            assert gasto_body.valor == 60
             mock_sb.rpc.assert_called_once_with(
                 "ajustar_estoque",
                 {

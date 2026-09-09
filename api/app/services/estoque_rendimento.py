@@ -22,6 +22,17 @@ def unidade_consumo(item: dict) -> str:
     return "uso" if e_rendimento(item) else str(item.get("unidade") or "un")
 
 
+def nome_unidade(quantidade: float, unidade: str) -> str:
+    """Devolve a unidade no singular/plural sem pluralizar abreviações físicas."""
+    if unidade == "uso":
+        return "uso" if quantidade == 1 else "usos"
+    return unidade
+
+
+def rotulo_quantidade(quantidade: float, unidade: str) -> str:
+    return f"{quantidade:g} {nome_unidade(quantidade, unidade)}"
+
+
 def quantidade_fisica_consumida(item: dict, quantidade_consumo: float) -> float:
     """Converte usos em fração de embalagem; itens comuns passam sem alteração."""
     return quantidade_consumo / usos_por_unidade(item) if e_rendimento(item) else quantidade_consumo

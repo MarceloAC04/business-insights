@@ -1,7 +1,7 @@
 import httpx
 from postgrest import SyncPostgrestClient
 from supabase import Client
-from supabase.lib.client_options import ClientOptions
+from supabase.lib.client_options import SyncClientOptions
 from app.core.config import get_settings
 
 
@@ -34,8 +34,28 @@ class ClienteSupabaseHttp1(Client):
         headers: dict[str, str],
         schema: str,
         timeout: int | float | httpx.Timeout,
+        verify: bool = True,
+        proxy: str | None = None,
+        http_client: httpx.Client | None = None,
     ) -> SyncPostgrestClient:
-        return ClientePostgrestHttp1(rest_url, headers=headers, schema=schema, timeout=timeout)
+        client = http_client or httpx.Client(
+            base_url=rest_url,
+            headers=headers,
+            timeout=timeout,
+            verify=verify,
+            proxy=proxy,
+            follow_redirects=True,
+            http2=False,
+        )
+        return ClientePostgrestHttp1(
+            rest_url,
+            headers=headers,
+            schema=schema,
+            timeout=timeout,
+            verify=verify,
+            proxy=proxy,
+            http_client=client,
+        )
 
 
 def _criar_cliente(supabase_url: str, supabase_key: str) -> Client:
@@ -45,7 +65,7 @@ def _criar_cliente(supabase_url: str, supabase_key: str) -> Client:
     return ClienteSupabaseHttp1(
         supabase_url,
         supabase_key,
-        options=ClientOptions(auto_refresh_token=False, persist_session=False),
+        options=SyncClientOptions(auto_refresh_token=False, persist_session=False),
     )
 
 

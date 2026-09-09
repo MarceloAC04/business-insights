@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import Literal
 from pydantic import BaseModel, Field
+from app.schemas.limites import LIMITE_VALOR_INPUT
 
 
 SeveridadeAlerta = Literal["critico", "alerta", "info"]
@@ -71,7 +72,9 @@ class PreferenciasAlertaOut(BaseModel):
 
 
 class PreferenciasAlertaUpdateIn(BaseModel):
-    limite_saldo_alerta: float = Field(ge=0, default=0.0)
+    limite_saldo_alerta: float = Field(
+        ge=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False, default=0.0
+    )
     dias_antecedencia_vencimento: int = Field(ge=0, default=7)
     canais: CanaisPreferencias = Field(default_factory=CanaisPreferencias)
     tipos_silenciados: list[str] = Field(default_factory=list)

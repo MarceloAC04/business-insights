@@ -10,12 +10,15 @@ frontend (frontend/salao_web/src/lib/api/atendimentos.ts).
 from datetime import datetime
 
 from pydantic import BaseModel, Field, model_validator
+from app.schemas.limites import LIMITE_VALOR_INPUT
 
 
 class ServicoEntradaIn(BaseModel):
     servico_id: str | None = None
     nome: str | None = None
-    preco: float | None = None
+    preco: float | None = Field(
+        default=None, ge=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False
+    )
 
     @model_validator(mode="after")
     def _validar(self):
@@ -30,7 +33,9 @@ class MaterialEntradaIn(BaseModel):
     item_estoque_id: str | None = None
     nome: str | None = None
     quantidade: float = Field(gt=0, allow_inf_nan=False)
-    preco: float | None = None
+    preco: float | None = Field(
+        default=None, ge=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False
+    )
 
     @model_validator(mode="after")
     def _validar(self):

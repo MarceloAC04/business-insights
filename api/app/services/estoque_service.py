@@ -9,11 +9,14 @@ from postgrest.exceptions import APIError
 from supabase import Client
 
 from app.core.supabase_client import row, rows
+from app.schemas.gastos import GastoIn
 from app.schemas.estoque import ItemIn, ItemPatchIn, MovimentacaoIn
+from app.services import gastos_service
 from app.services.estoque_rendimento import (
     custo_por_unidade_consumo,
     e_rendimento,
     quantidade_consumo_disponivel,
+    rotulo_quantidade,
     unidade_consumo,
 )
 
@@ -174,7 +177,7 @@ def _gerar_alertas_rendimento(supabase: Client, user_id: str, itens: list[dict])
                 tipo, severidade = "estoque_critico", "critico"
             else:
                 titulo = f"Poucos usos disponíveis: {item['nome']}"
-                mensagem = f"Restam {disponiveis:g} uso(s) de {item['nome']}."
+                mensagem = f"Restam {rotulo_quantidade(disponiveis, 'uso')} de {item['nome']}."
                 tipo, severidade = "estoque_baixo", "alerta"
             _registrar_alerta_vivo(
                 supabase,
@@ -249,8 +252,8 @@ def _montar_planejamento_reposicao(
             continue
 
         base = (
-            f"Limite de {minimo:g} {unidade}(s) + agenda de {agendado:g} {unidade}(s)"
-            f" + {medio_diario:g} {unidade}(s)/dia pela média dos últimos "
+            f"Limite de {rotulo_quantidade(minimo, unidade)} + agenda de {rotulo_quantidade(agendado, unidade)}"
+            f" + {rotulo_quantidade(medio_diario, unidade)}/dia pela média dos últimos "
             f"{_JANELA_PLANEJAMENTO_DIAS} dias."
         )
         planejamento.append({
@@ -267,6 +270,40 @@ def _montar_planejamento_reposicao(
             "base_calculo": base,
         })
     return sorted(planejamento, key=lambda item: (-item["quantidade_sugerida"], item["nome"].lower()))
+
+
+def _registrar_gasto_entrada(
+    supabase: Client,
+    user_id: str,
+    nome_item: str,
+    custo_unitario: float | None,
+    quantidade: float,
+    motivo: str = "",
+) -> None:
+    """Lança em Gastos o custo unitário multiplicado pela quantidade entrada."""
+    if custo_unitario is None:
+        return
+    valor = float(custo_unitario) * float(quantidade)
+    if valor <= 0:
+        return
+
+    motivo_limpo = motivo.strip()
+    descricao = (
+        f"{motivo_limpo} — {nome_item}"
+        if motivo_limpo
+        else f"Entrada de estoque — {nome_item}"
+    )
+    gastos_service.criar_gasto(
+        supabase,
+        user_id,
+        GastoIn(
+            nome=descricao,
+            valor=valor,
+            prazo_pagamento=gastos_service._hoje_brasil(),
+            forma_pagamento="a_vista",
+            categoria="material",
+        ),
+    )
 
 
 def _planejar_reposicao(supabase: Client, user_id: str, itens: list[dict]) -> list[dict]:
@@ -377,6 +414,13 @@ def criar(supabase: Client, user_id: str, body: ItemIn) -> dict:
     }
     resp = supabase.table("estoque_itens").insert(campos).execute()
     criado = row(resp.data)
+    _registrar_gasto_entrada(
+        supabase,
+        user_id,
+        body.nome,
+        body.custo_unitario,
+        body.quantidade_atual,
+    )
     return _buscar_item(supabase, user_id, str(criado["id"]))
 
 
@@ -560,6 +604,15 @@ def criar_movimentacao(supabase: Client, user_id: str, item_id: str, body: Movim
 
     if campos_item:
         supabase.table("estoque_itens").update(campos_item).eq("id", item_id).eq("user_id", user_id).execute()
+
+    _registrar_gasto_entrada(
+        supabase,
+        user_id,
+        item["nome"],
+        body.custo_unitario,
+        body.quantidade,
+        body.motivo,
+    )
 
     return _buscar_item(supabase, user_id, item_id)
 

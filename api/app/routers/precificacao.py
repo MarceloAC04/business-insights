@@ -10,6 +10,7 @@ O Flutter envia os parâmetros, recebe o resultado e exibe o diagnóstico.
 
 from fastapi import APIRouter, Query
 from app.schemas.envelope import ResponseModel, sucesso
+from app.schemas.limites import LIMITE_VALOR_INPUT
 from app.schemas.relatorio import FiltroPrecificacao, ResultadoPrecificacao
 from app.services.precificacao_service import calcular_preco_minimo
 
@@ -32,6 +33,7 @@ def calcular(
     preco_atual: float | None = Query(
         default=None,
         ge=0,
+        le=LIMITE_VALOR_INPUT,
         description="Preço que a proprietária cobra hoje — para comparação diagnóstica",
     ),
 ):

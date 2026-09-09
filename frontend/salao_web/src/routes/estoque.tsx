@@ -49,7 +49,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatBRL, formatDateTime, formatMoedaInput, parseMoedaInput } from "@/lib/format";
+import { formatBRL, formatDateTime, formatMoedaInput, parseMoedaInput, pluralizar } from "@/lib/format";
 import { EstoqueApi } from "@/lib/api/estoque";
 import {
   textoDoErro,
@@ -315,10 +315,15 @@ function EstoquePage() {
     if (!entradaItem) return;
     const quantidade = quantidadeInformada;
     const custoUnitario = parseMoedaInput(custo);
-    if (!quantidadeValida || !Number.isFinite(custoUnitario) || custoUnitario < 0) {
+    if (
+      !quantidadeValida ||
+      !Number.isFinite(custoUnitario) ||
+      custoUnitario < 0
+    ) {
       toast.error("Informe quantidade e custo válidos.");
       return;
     }
+    const valorTotalGasto = custoUnitario * quantidade;
     movimentacao.mutate(
       {
         itemId: entradaItem.id,
@@ -332,7 +337,11 @@ function EstoquePage() {
       },
       {
         onSuccess: () => {
-          toast.success(`Compra adicionada ao estoque de ${entradaItem.nome}.`);
+          toast.success(
+            valorTotalGasto > 0
+              ? `Compra adicionada ao estoque de ${entradaItem.nome} e lançada em Gastos.`
+              : `Compra adicionada ao estoque de ${entradaItem.nome}.`,
+          );
           setEntradaItem(null);
         },
         onError: (erro) => toast.error(textoDoErro(erro)),
@@ -371,7 +380,7 @@ function EstoquePage() {
             tipoSaida === "saida"
               ? "Saída registrada."
               : saidaItem.modo_controle === "rendimento_usos"
-                ? `Contagem atualizada para ${quantidadeFormatada(quantidade * (saidaItem.usos_por_unidade ?? 1))} usos.`
+                ? `Contagem atualizada para ${quantidadeFormatada(quantidade * (saidaItem.usos_por_unidade ?? 1))} ${pluralizar(quantidade * (saidaItem.usos_por_unidade ?? 1), "uso")}.`
                 : `Quantidade atualizada para ${quantidadeFormatada(quantidade)} ${saidaItem.unidade}.`,
           );
           setSaidaItem(null);
@@ -385,10 +394,15 @@ function EstoquePage() {
     const quantidade = Number(formItem.quantidade.replace(",", "."));
     const minimo = Number(formItem.minimo.replace(",", "."));
     const custoUnitario = parseMoedaInput(formItem.custo);
-    if (!formItem.nome.trim() || !(custoUnitario >= 0) || !Number.isFinite(quantidade)) {
+    if (
+      !formItem.nome.trim() ||
+      !(custoUnitario >= 0) ||
+      !Number.isFinite(quantidade)
+    ) {
       toast.error("Informe nome, quantidade e custo do produto.");
       return;
     }
+    const valorTotalGasto = custoUnitario * quantidade;
     const usosPorUnidade = Number(formItem.usosPorUnidade.replace(",", "."));
     const usosMinimos = Number(formItem.usosMinimos.replace(",", "."));
     if (formItem.modoControle === "rendimento_usos" && !(usosPorUnidade > 0)) {
@@ -416,7 +430,11 @@ function EstoquePage() {
         onSuccess: () => {
           setItemAberto(false);
           setFormItem(formItemInicial);
-          toast.success("Produto cadastrado no estoque.");
+          toast.success(
+            valorTotalGasto > 0
+              ? "Produto cadastrado no estoque e valor lançado em Gastos."
+              : "Produto cadastrado no estoque.",
+          );
         },
         onError: (erro) => toast.error(textoDoErro(erro)),
       },
@@ -556,7 +574,9 @@ function EstoquePage() {
       { id: kitParaMontar.id, quantidade, confirmar: confirmarEstoqueInsuficiente },
       {
         onSuccess: () => {
-          toast.success(`${quantidade} unidade(s) de ${kitParaMontar.nome} montada(s).`);
+          toast.success(
+            `${quantidade} ${pluralizar(quantidade, "unidade")} de ${kitParaMontar.nome} ${pluralizar(quantidade, "montada")}.`,
+          );
           setFaltantes(null);
           setKitParaMontar(null);
         },
@@ -638,7 +658,7 @@ function EstoquePage() {
           <SectionTitle
             hint={
               itens.length
-                ? `${produtosFiltrados.length} de ${itens.length} produto(s) exibido(s)`
+                ? `${produtosFiltrados.length} de ${itens.length} ${pluralizar(itens.length, "produto")} ${pluralizar(produtosFiltrados.length, "exibido", "exibidos")}`
                 : "Bipe a embalagem para reconhecer o produto ou cadastrar um novo"
             }
             action={
@@ -708,7 +728,7 @@ function EstoquePage() {
                         <p className="mt-0.5 text-xs text-muted-foreground">
                           {rotuloCategoria.get(p.categoria) ?? p.categoria} •{" "}
                           {p.modo_controle === "rendimento_usos"
-                            ? `cada embalagem rende ${quantidadeFormatada(p.usos_por_unidade ?? 0)} usos`
+                            ? `cada embalagem rende ${quantidadeFormatada(p.usos_por_unidade ?? 0)} ${pluralizar(p.usos_por_unidade ?? 0, "uso")}`
                             : `mínimo ${p.quantidade_minima} ${p.unidade}`}
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -723,7 +743,9 @@ function EstoquePage() {
                               : `Custo médio ${formatBRL(p.custo_medio)}`}
                           </Pill>
                           {p.modo_controle === "rendimento_usos" && (p.deficit_usos ?? 0) > 0 ? (
-                            <Pill tone="warning">Faltam {quantidadeFormatada(p.deficit_usos ?? 0)} usos</Pill>
+                            <Pill tone="warning">
+                              {p.deficit_usos === 1 ? "Falta" : "Faltam"} {quantidadeFormatada(p.deficit_usos ?? 0)} {pluralizar(p.deficit_usos ?? 0, "uso")}
+                            </Pill>
                           ) : p.deficit > 0 ? (
                             <Pill tone="warning">Faltam {p.deficit}</Pill>
                           ) : null}
@@ -745,7 +767,7 @@ function EstoquePage() {
                         </p>
                         <p className="text-[11px] text-muted-foreground">
                           {p.modo_controle === "rendimento_usos"
-                            ? `usos • ${quantidadeFormatada(p.quantidade_atual)} embalagem(ns)`
+                            ? `${pluralizar(p.usos_disponiveis ?? p.quantidade_atual, "uso")} • ${quantidadeFormatada(p.quantidade_atual)} ${pluralizar(p.quantidade_atual, "embalagem")}`
                             : p.unidade}
                         </p>
                       </div>
@@ -761,7 +783,7 @@ function EstoquePage() {
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => abrirSaida(p, "ajuste")}>
                         <ClipboardCheck className="size-4" />
-                        {p.modo_controle === "rendimento_usos" ? "Conferir embalagens" : "Conferir quantidade"}
+                        {p.modo_controle === "rendimento_usos" ? "Ajustar embalagens" : "Ajustar saldo"}
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => setDetalheItem(p)}>
                         <History className="size-4" />
@@ -825,8 +847,8 @@ function EstoquePage() {
                         </div>
                         <Pill tone="warning">
                           {item.embalagens_sugeridas != null
-                            ? `${item.embalagens_sugeridas} embalagem(ns)`
-                            : `${quantidadeFormatada(item.quantidade_sugerida)} ${item.unidade_consumo}(s)`}
+                            ? `${item.embalagens_sugeridas} ${pluralizar(item.embalagens_sugeridas, "embalagem")}`
+                            : `${quantidadeFormatada(item.quantidade_sugerida)} ${item.unidade_consumo === "uso" ? pluralizar(item.quantidade_sugerida, "uso") : item.unidade_consumo}`}
                         </Pill>
                       </div>
                     </Card>
@@ -875,14 +897,18 @@ function EstoquePage() {
                           <Pill tone={k.margem >= 0 ? "positive" : "negative"}>
                             Lucro {formatBRL(k.margem)}
                           </Pill>
-                          <Pill>Dá para montar {k.quantidade_montavel}</Pill>
+                          <Pill>
+                            Dá para montar {k.quantidade_montavel} {pluralizar(k.quantidade_montavel, "kit")}
+                          </Pill>
                         </div>
                       </div>
                       <div className="shrink-0 text-right">
                         <p className="font-display text-2xl font-semibold tabular-nums">
                           {k.quantidade_montada}
                         </p>
-                        <p className="text-[11px] text-muted-foreground">montados</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {pluralizar(k.quantidade_montada, "montado", "montados")}
+                        </p>
                         <div className="mt-2 flex flex-col gap-1.5">
                           <Button
                             size="sm"
@@ -946,7 +972,7 @@ function EstoquePage() {
                       }
                     >
                       {m.quantidade_consumida != null && m.unidade_consumo === "uso"
-                        ? `${m.tipo === "entrada" ? "+" : m.tipo === "saida" ? "−" : "Ajuste: "}${quantidadeFormatada(m.quantidade_consumida)} uso(s)`
+                        ? `${m.tipo === "entrada" ? "+" : m.tipo === "saida" ? "−" : "Ajuste: "}${quantidadeFormatada(m.quantidade_consumida)} ${pluralizar(m.quantidade_consumida, "uso")}`
                         : m.saldo_anterior != null && m.saldo_atual != null
                         ? `${quantidadeFormatada(m.saldo_anterior)} → ${quantidadeFormatada(m.saldo_atual)}`
                         : `${m.tipo === "entrada" ? "+" : m.tipo === "saida" ? "−" : "Ajuste: "}${quantidadeFormatada(m.quantidade)}`}
@@ -971,7 +997,7 @@ function EstoquePage() {
             <DialogTitle>{detalheItem?.nome}</DialogTitle>
             <DialogDescription>
               {detalheItem?.modo_controle === "rendimento_usos"
-                ? `Cada embalagem rende ${quantidadeFormatada(detalheItem.usos_por_unidade ?? 0)} usos.`
+                ? `Cada embalagem rende ${quantidadeFormatada(detalheItem.usos_por_unidade ?? 0)} ${pluralizar(detalheItem.usos_por_unidade ?? 0, "uso")}.`
                 : `Controle por ${detalheItem?.unidade}.`}
             </DialogDescription>
           </DialogHeader>
@@ -982,7 +1008,7 @@ function EstoquePage() {
                   <p className="text-muted-foreground">Saldo atual</p>
                   <p className="font-semibold">
                     {detalheItem.modo_controle === "rendimento_usos"
-                      ? `${quantidadeFormatada(detalheItem.usos_disponiveis ?? 0)} usos`
+                      ? `${quantidadeFormatada(detalheItem.usos_disponiveis ?? 0)} ${pluralizar(detalheItem.usos_disponiveis ?? 0, "uso")}`
                       : `${quantidadeFormatada(detalheItem.quantidade_atual)} ${detalheItem.unidade}`}
                   </p>
                 </div>
@@ -1007,7 +1033,7 @@ function EstoquePage() {
                           <p>{m.motivo}</p>
                           <p className="text-xs text-muted-foreground">
                             {formatDateTime(m.criado_em)} • {m.quantidade_consumida != null && m.unidade_consumo === "uso"
-                              ? `${quantidadeFormatada(m.quantidade_consumida)} uso(s)`
+                              ? `${quantidadeFormatada(m.quantidade_consumida)} ${pluralizar(m.quantidade_consumida, "uso")}`
                               : `${quantidadeFormatada(m.quantidade)} ${detalheItem.unidade}`}
                           </p>
                         </li>
@@ -1138,7 +1164,7 @@ function EstoquePage() {
             formEdicao.modoControle === "rendimento_usos" ? (
               <div className="space-y-3 rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm">
                 <p className="text-foreground">
-                  O saldo atual está em {itemParaEditar.unidade}. Ao salvar, ele passará a ser lido como embalagens; confira antes se {quantidadeFormatada(itemParaEditar.quantidade_atual)} representa mesmo essa quantidade de embalagens.
+                  O saldo atual está em {itemParaEditar.unidade}. Ao salvar, ele passará a ser lido como {pluralizar(itemParaEditar.quantidade_atual, "embalagem")}; confira antes se {quantidadeFormatada(itemParaEditar.quantidade_atual)} representa mesmo essa quantidade de {pluralizar(itemParaEditar.quantidade_atual, "embalagem")}.
                 </p>
                 <div className="flex items-center gap-2">
                   <Switch
@@ -1180,7 +1206,7 @@ function EstoquePage() {
                 </div>
                 {itemParaEditar?.modo_controle !== "rendimento_usos" ? (
                   <p className="rounded-xl bg-muted p-3 text-sm text-muted-foreground">
-                    O saldo atual de {quantidadeFormatada(itemParaEditar?.quantidade_atual ?? 0)} embalagem(ns) passará a representar {quantidadeFormatada((itemParaEditar?.quantidade_atual ?? 0) * (Number(formEdicao.usosPorUnidade.replace(",", ".")) || 0))} usos. Revise a quantidade usada nos serviços vinculados a este produto.
+                    O saldo atual de {quantidadeFormatada(itemParaEditar?.quantidade_atual ?? 0)} {pluralizar(itemParaEditar?.quantidade_atual ?? 0, "embalagem")} passará a representar {quantidadeFormatada((itemParaEditar?.quantidade_atual ?? 0) * (Number(formEdicao.usosPorUnidade.replace(",", ".")) || 0))} {pluralizar((itemParaEditar?.quantidade_atual ?? 0) * (Number(formEdicao.usosPorUnidade.replace(",", ".")) || 0), "uso")}. Revise a quantidade usada nos serviços vinculados a este produto.
                   </p>
                 ) : null}
               </>
@@ -1221,16 +1247,18 @@ function EstoquePage() {
       <Dialog open={entradaItem !== null} onOpenChange={(o) => !o && setEntradaItem(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Adicionar compra</DialogTitle>
+            <DialogTitle>Adicionar produto ao estoque</DialogTitle>
             <DialogDescription>
               {entradaItem?.nome} — saldo atual {entradaItem?.quantidade_atual}{" "}
-              {entradaItem?.modo_controle === "rendimento_usos" ? "embalagem(ns)" : entradaItem?.unidade}. Informe o que chegou para acrescentar ao estoque.
+              {entradaItem?.modo_controle === "rendimento_usos"
+                ? pluralizar(entradaItem?.quantidade_atual ?? 0, "embalagem")
+                : entradaItem?.unidade}. Informe o que foi comprado ou produzido para acrescentar ao estoque.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="qtd-entrada">
-                Quantidade comprada ({entradaItem?.modo_controle === "rendimento_usos" ? "embalagens" : entradaItem?.unidade})
+                Quantidade adicionada ({entradaItem?.modo_controle === "rendimento_usos" ? "embalagens" : entradaItem?.unidade})
               </Label>
               <Input
                 id="qtd-entrada"
@@ -1251,6 +1279,11 @@ function EstoquePage() {
               />
             </div>
             <div className="space-y-1.5 sm:col-span-2">
+              <p className="text-xs text-muted-foreground">
+                O gasto é calculado automaticamente: custo unitário × quantidade.
+              </p>
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
               <Label htmlFor="motivo-entrada">Motivo</Label>
               <Input
                 id="motivo-entrada"
@@ -1264,7 +1297,9 @@ function EstoquePage() {
             <p role="status" className="rounded-xl bg-muted p-3 text-sm">
               Prévia: {quantidadeFormatada(entradaItem.quantidade_atual)} +{" "}
               {quantidadeFormatada(quantidadeInformada)} = {quantidadeFormatada(saldoPrevisto)}{" "}
-              {entradaItem.modo_controle === "rendimento_usos" ? "embalagens" : entradaItem.unidade} em estoque.
+              {entradaItem.modo_controle === "rendimento_usos"
+                ? pluralizar(saldoPrevisto, "embalagem")
+                : entradaItem.unidade} em estoque.
             </p>
           ) : null}
           <DialogFooter>
@@ -1280,8 +1315,8 @@ function EstoquePage() {
               disabled={movimentacao.isPending || !quantidadeValida}
             >
               {quantidadeValida
-                ? `Adicionar ${quantidadeFormatada(quantidadeInformada)} ${entradaItem?.modo_controle === "rendimento_usos" ? "embalagem(ns)" : entradaItem?.unidade ?? ""}`
-                : "Adicionar compra"}
+                ? `Adicionar ${quantidadeFormatada(quantidadeInformada)} ${entradaItem?.modo_controle === "rendimento_usos" ? pluralizar(quantidadeInformada, "embalagem") : entradaItem?.unidade ?? ""}`
+                : "Adicionar produto"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1292,11 +1327,13 @@ function EstoquePage() {
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>
-              {tipoSaida === "ajuste" ? "Conferir quantidade" : "Registrar saída"}
+              {tipoSaida === "ajuste" ? "Ajustar saldo" : "Registrar saída"}
             </DialogTitle>
             <DialogDescription>
               {saidaItem?.nome} — saldo atual {saidaItem?.quantidade_atual}{" "}
-              {saidaItem?.modo_controle === "rendimento_usos" ? "embalagem(ns)" : saidaItem?.unidade}.
+              {saidaItem?.modo_controle === "rendimento_usos"
+                ? pluralizar(saidaItem?.quantidade_atual ?? 0, "embalagem")
+                : saidaItem?.unidade}.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1351,11 +1388,11 @@ function EstoquePage() {
             <p role="status" className="rounded-xl bg-muted p-3 text-sm">
               {tipoSaida === "ajuste"
                 ? saidaItem.modo_controle === "rendimento_usos"
-                  ? `Prévia: o saldo passará de ${quantidadeFormatada(saidaItem.usos_disponiveis ?? 0)} para ${quantidadeFormatada(saldoPrevisto * (saidaItem.usos_por_unidade ?? 1))} usos.`
+                  ? `Prévia: o saldo passará de ${quantidadeFormatada(saidaItem.usos_disponiveis ?? 0)} para ${quantidadeFormatada(saldoPrevisto * (saidaItem.usos_por_unidade ?? 1))} ${pluralizar(saldoPrevisto * (saidaItem.usos_por_unidade ?? 1), "uso")}.`
                   : `Prévia: o saldo passará de ${quantidadeFormatada(saidaItem.quantidade_atual)} para ${quantidadeFormatada(saldoPrevisto)} ${saidaItem.unidade}.`
                 : saldoPrevisto < 0
                   ? "Essa saída é maior que o saldo disponível. Confira a quantidade em estoque antes de registrar."
-                  : `Prévia: ${quantidadeFormatada(saidaItem.quantidade_atual)} − ${quantidadeFormatada(quantidadeInformada)} = ${quantidadeFormatada(saldoPrevisto)} ${saidaItem.modo_controle === "rendimento_usos" ? "embalagens" : saidaItem.unidade} em estoque.`}
+                  : `Prévia: ${quantidadeFormatada(saidaItem.quantidade_atual)} − ${quantidadeFormatada(quantidadeInformada)} = ${quantidadeFormatada(saldoPrevisto)} ${saidaItem.modo_controle === "rendimento_usos" ? pluralizar(saldoPrevisto, "embalagem") : saidaItem.unidade} em estoque.`}
             </p>
           ) : null}
           <DialogFooter>
@@ -1376,7 +1413,7 @@ function EstoquePage() {
             >
               {tipoSaida === "ajuste" && quantidadeValida
                 ? saidaItem?.modo_controle === "rendimento_usos"
-                  ? `Atualizar para ${quantidadeFormatada(quantidadeInformada * (saidaItem.usos_por_unidade ?? 1))} usos`
+                  ? `Atualizar para ${quantidadeFormatada(quantidadeInformada * (saidaItem.usos_por_unidade ?? 1))} ${pluralizar(quantidadeInformada * (saidaItem.usos_por_unidade ?? 1), "uso")}`
                   : `Atualizar para ${quantidadeFormatada(quantidadeInformada)} ${saidaItem?.unidade ?? ""}`
                 : tipoSaida === "ajuste"
                   ? "Atualizar quantidade"
@@ -1393,7 +1430,7 @@ function EstoquePage() {
             <DialogTitle>Montar kit</DialogTitle>
             <DialogDescription>
               {kitParaMontar?.nome} — os insumos serão baixados do estoque. Dá para montar{" "}
-              {kitParaMontar?.quantidade_montavel} com o saldo de hoje.
+              {kitParaMontar?.quantidade_montavel} {pluralizar(kitParaMontar?.quantidade_montavel ?? 0, "kit")} com o saldo de hoje.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -1428,7 +1465,7 @@ function EstoquePage() {
 
       <EstoqueInsuficienteDialog
         faltantes={faltantes}
-        acao={`montar ${unidades} kit(s)`}
+        acao={`montar ${unidades} ${pluralizar(Number(unidades), "kit")}`}
         confirmando={montar.isPending}
         onCancelar={() => setFaltantes(null)}
         onConfirmar={() => confirmarMontagem(true)}
@@ -1440,7 +1477,7 @@ function EstoquePage() {
           <DialogHeader>
             <DialogTitle>Vender kit</DialogTitle>
             <DialogDescription>
-              {kitParaVender?.nome} — {kitParaVender?.quantidade_montada} montado(s) na prateleira.
+              {kitParaVender?.nome} — {kitParaVender?.quantidade_montada} {pluralizar(kitParaVender?.quantidade_montada ?? 0, "montado", "montados")} na prateleira.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1604,6 +1641,11 @@ function EstoquePage() {
                   }
                   placeholder="0,00"
                 />
+              </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <p className="text-xs text-muted-foreground">
+                  O gasto é calculado automaticamente: custo unitário × quantidade cadastrada.
+                </p>
               </div>
             </div>
             <div className="space-y-1.5">

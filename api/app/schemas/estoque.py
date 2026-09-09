@@ -1,6 +1,7 @@
 """Schemas de `estoque` (endpoints-backend.md §5)."""
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.schemas.limites import LIMITE_VALOR_INPUT
 
 UNIDADES = {"un", "ml", "g", "cx"}
 CATEGORIAS = {
@@ -26,7 +27,9 @@ class ItemIn(BaseModel):
     categoria: str
     quantidade_atual: float = 0
     quantidade_minima: float = 0
-    custo_unitario: float = 0
+    custo_unitario: float = Field(
+        default=0, ge=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False
+    )
     codigo_barras: str | None = None
     modo_controle: str = "quantidade"
     usos_por_unidade: float | None = Field(default=None, allow_inf_nan=False)
@@ -97,10 +100,14 @@ def _validar_modo_controle(
 
 
 class MovimentacaoIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     tipo: str
     quantidade: float = Field(allow_inf_nan=False)
     motivo: str = ""
-    custo_unitario: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    custo_unitario: float | None = Field(
+        default=None, ge=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False
+    )
 
     @model_validator(mode="after")
     def _validar(self):

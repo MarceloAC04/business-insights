@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.schemas.gastos import FormaPagamento
+from app.schemas.limites import LIMITE_VALOR_INPUT
 
 
 class KitItemIn(BaseModel):
@@ -13,13 +14,15 @@ class KitItemIn(BaseModel):
 
 class KitIn(BaseModel):
     nome: str = Field(min_length=1)
-    preco_venda: float = Field(gt=0)
+    preco_venda: float = Field(gt=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
     itens: list[KitItemIn] = Field(default_factory=list)
 
 
 class KitPatchIn(BaseModel):
     nome: str | None = Field(default=None, min_length=1)
-    preco_venda: float | None = Field(default=None, gt=0)
+    preco_venda: float | None = Field(
+        default=None, gt=0, le=LIMITE_VALOR_INPUT, allow_inf_nan=False
+    )
     itens: list[KitItemIn] | None = None
 
 
@@ -33,7 +36,9 @@ class MontarKitIn(BaseModel):
 class VenderKitIn(BaseModel):
     quantidade: int = Field(gt=0)
     forma_pagamento: FormaPagamento = "a_vista"
-    preco_unitario: float | None = None
+    preco_unitario: float | None = Field(
+        default=None, le=LIMITE_VALOR_INPUT, allow_inf_nan=False
+    )
     data: datetime | None = None
 
 

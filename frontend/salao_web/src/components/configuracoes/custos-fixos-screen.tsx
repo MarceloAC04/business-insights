@@ -30,7 +30,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { formatBRL, formatMoedaInput, nomeMes, parseMoedaInput } from "@/lib/format";
+import { formatBRL, formatMoedaInput, parseMoedaInput } from "@/lib/format";
 import {
   textoDoErro,
   useCriarCustoFixo,
@@ -107,7 +107,7 @@ export function CustosFixosScreen() {
             </Button>
           }
         >
-          Custos fixos de {nomeMes(Number(competencia.slice(5)))}
+          Custos fixos
         </SectionTitle>
         {carregandoCustos ? (
           <ListSkeleton />

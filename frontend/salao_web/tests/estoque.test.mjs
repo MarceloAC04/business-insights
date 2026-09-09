@@ -45,6 +45,35 @@ test("compra soma e saída subtrai, sem substituir o saldo", () => {
   assert.equal(item().custo_medio, 55);
 });
 
+test("produto comprado ou produzido calcula gasto por custo e quantidade", () => {
+  const db = new DemoDatabase();
+  db.createItem({
+    nome: "Produto produzido",
+    unidade: "un",
+    categoria: "outro",
+    quantidade_atual: 2,
+    custo_unitario: 12,
+  });
+
+  const agora = new Date();
+  const gasto = db
+    .getGastos(agora.getFullYear(), agora.getMonth() + 1)
+    .result.gastos.find((item) => item.nome === "Entrada de estoque — Produto produzido");
+  assert.ok(gasto);
+  assert.equal(gasto.valor, 24);
+  assert.equal(gasto.categoria, "material");
+
+  const item = db.getItens().result.itens.find((produto) => produto.nome === "Produto produzido");
+  db.createMovimentacao(item.id, {
+    tipo: "entrada",
+    quantidade: 1,
+    custo_unitario: 12,
+    motivo: "Produção própria",
+  });
+  const gastos = db.getGastos(agora.getFullYear(), agora.getMonth() + 1).result.gastos;
+  assert.ok(gastos.some((atual) => atual.nome === "Produção própria — Produto produzido"));
+});
+
 test("saída sem saldo não altera estoque ou histórico", () => {
   const { db, item, movimentar } = cenario();
   const antes = db.getMovimentacoes(item().id).result.movimentacoes.length;

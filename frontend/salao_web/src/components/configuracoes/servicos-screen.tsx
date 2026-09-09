@@ -31,7 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatBRL, formatMoedaInput, parseMoedaInput } from "@/lib/format";
+import { formatBRL, formatMoedaInput, parseMoedaInput, pluralizar } from "@/lib/format";
 import {
   textoDoErro,
   useCategoriasServico,
@@ -247,7 +247,7 @@ export function ServicosScreen() {
                             ? servico.produtos_padrao
                                 .map(
                                   (produto) =>
-                                    `${produto.quantidade} ${produto.unidade_consumo} ${produto.nome}`,
+                                    `${produto.quantidade} ${produto.unidade_consumo === "uso" ? pluralizar(produto.quantidade, "uso") : produto.unidade_consumo} ${produto.nome}`,
                                 )
                                 .join(", ")
                             : "sem insumos padrão"}
@@ -415,7 +415,7 @@ export function ServicosScreen() {
                   );
                   const rotuloConsumo =
                     itemEstoque.modo_controle === "rendimento_usos"
-                      ? "uso(s) por atendimento"
+                      ? "usos por atendimento"
                       : `${itemEstoque.unidade} por atendimento`;
                   return (
                     <div

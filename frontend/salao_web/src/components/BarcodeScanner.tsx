@@ -1,5 +1,5 @@
 import { BarcodeFormat, DecodeHintType } from "@zxing/library";
-import { BrowserMultiFormatReader } from "@zxing/browser";
+import { BrowserMultiFormatOneDReader } from "@zxing/browser";
 import type { IScannerControls } from "@zxing/browser";
 import { CameraOff, ScanLine } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -29,11 +29,27 @@ const FORMATOS_PRODUTO = [
   BarcodeFormat.UPC_E,
   BarcodeFormat.CODE_128,
   BarcodeFormat.CODE_39,
+  BarcodeFormat.CODE_93,
+  BarcodeFormat.ITF,
 ];
 
-const hints = new Map();
+const hints = new Map<DecodeHintType, unknown>();
 hints.set(DecodeHintType.POSSIBLE_FORMATS, FORMATOS_PRODUTO);
 hints.set(DecodeHintType.TRY_HARDER, true);
+
+const OPCOES_LEITOR = {
+  // Uma tentativa mais frequente faz diferença quando o código passa alguns
+  // frames desfocado pela câmera, sem deixar o celular trabalhando sem pausa.
+  delayBetweenScanAttempts: 120,
+  delayBetweenScanSuccess: 300,
+  tryPlayVideoTimeout: 10000,
+};
+
+type RecursosCamera = MediaTrackCapabilities & {
+  focusMode?: string[];
+  exposureMode?: string[];
+  whiteBalanceMode?: string[];
+};
 
 export function BarcodeScannerDialog({
   open,
@@ -52,9 +68,7 @@ export function BarcodeScannerDialog({
   // o nó realmente existe, então o efeito abaixo espera por ele em vez de
   // assumir que já está montado.
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
-  // DEBUG TEMPORÁRIO — remover depois de confirmar o que a câmera desse celular
-  // realmente aceita (zoom/foco reportados por getCapabilities costumam mentir).
-  const [debug, setDebug] = useState("");
+  const [cameraPronta, setCameraPronta] = useState(false);
 
   const videoRef = useCallback((node: HTMLVideoElement | null) => {
     setVideo(node);
@@ -63,55 +77,63 @@ export function BarcodeScannerDialog({
   useEffect(() => {
     if (!open || !video) return;
     setErro(null);
+    setCameraPronta(false);
     let cancelado = false;
-    const leitor = new BrowserMultiFormatReader(hints);
+    const leitor = new BrowserMultiFormatOneDReader(hints, OPCOES_LEITOR);
 
-    leitor
-      .decodeFromConstraints(
-        {
-          video: {
-            facingMode: "environment",
-            // 480x640 (o padrão do Chrome) é baixo demais pra ler linhas finas
-            // de código de barras — pede a maior resolução que a câmera aceitar.
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            // Zoom confirmado funcionando neste aparelho (capability 1x-8x). Focar de
-            // perto demais sai da faixa que a lente consegue focar sozinha — em vez
-            // disso, afasta um pouco o celular e usa zoom pra compensar.
-            advanced: [{ focusMode: "continuous", zoom: 3 }] as any,
+    const iniciar = async () => {
+      try {
+        const controls = await leitor.decodeFromConstraints(
+          {
+            audio: false,
+            video: {
+              // `ideal` usa a câmera traseira no celular, mas não quebra em
+              // notebook que só tem webcam frontal.
+              facingMode: { ideal: "environment" },
+              // Pede uma imagem grande sem exigir uma resolução mínima: alguns
+              // aparelhos não entregam 1920x1080 e precisam de fallback próprio.
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+              frameRate: { ideal: 30 },
+            },
           },
-        },
-        video,
-        (resultado) => {
-          if (resultado && !cancelado) {
-            cancelado = true;
-            controlsRef.current?.stop();
-            onDetectado(resultado.getText());
-          }
-        },
-      )
-      .then((controls) => {
+          video,
+          (resultado) => {
+            if (resultado && !cancelado) {
+              cancelado = true;
+              controlsRef.current?.stop();
+              onDetectado(resultado.getText());
+            }
+          },
+        );
         if (cancelado) {
           controls.stop();
           return;
         }
         controlsRef.current = controls;
         const track = (video.srcObject as MediaStream | null)?.getVideoTracks()[0];
-        const caps = track?.getCapabilities?.() as
-          | (MediaTrackCapabilities & { zoom?: { min: number; max: number; step: number }; focusMode?: string[] })
-          | undefined;
-        const settings = track?.getSettings?.() as
-          | (MediaTrackSettings & { zoom?: number; focusMode?: string })
-          | undefined;
-        setDebug(
-          `real=${video.videoWidth}x${video.videoHeight} ` +
-            `zoom(cap)=${caps?.zoom ? JSON.stringify(caps.zoom) : "sem suporte"} ` +
-            `zoom(aplicado)=${settings?.zoom ?? "?"} ` +
-            `focusMode(cap)=${caps?.focusMode ? JSON.stringify(caps.focusMode) : "sem suporte"} ` +
-            `focusMode(aplicado)=${settings?.focusMode ?? "?"}`,
-        );
-      })
-      .catch((e: unknown) => {
+        if (track) {
+          const caps = track.getCapabilities?.() as RecursosCamera | undefined;
+          const focoContinuo = caps?.focusMode?.includes("continuous");
+          const exposicaoContinua = caps?.exposureMode?.includes("continuous");
+          const balancoContinuo = caps?.whiteBalanceMode?.includes("continuous");
+          const avancado: Record<string, string>[] = [];
+
+          if (focoContinuo) avancado.push({ focusMode: "continuous" });
+          if (exposicaoContinua) avancado.push({ exposureMode: "continuous" });
+          if (balancoContinuo) avancado.push({ whiteBalanceMode: "continuous" });
+
+          if (avancado.length > 0) {
+            try {
+              await track.applyConstraints({ advanced: avancado } as MediaTrackConstraints);
+            } catch {
+              // Alguns navegadores anunciam o recurso, mas recusam a aplicação.
+              // A câmera continua funcionando com os ajustes automáticos padrão.
+            }
+          }
+        }
+        setCameraPronta(true);
+      } catch (e: unknown) {
         const nome = e instanceof Error ? e.name : "";
         setErro(
           nome === "NotAllowedError"
@@ -120,7 +142,10 @@ export function BarcodeScannerDialog({
               ? "Nenhuma câmera encontrada neste dispositivo."
               : "Não foi possível abrir a câmera.",
         );
-      });
+      }
+    };
+
+    void iniciar();
 
     return () => {
       cancelado = true;
@@ -135,8 +160,8 @@ export function BarcodeScannerDialog({
         <DialogHeader>
           <DialogTitle>Bipar produto</DialogTitle>
           <DialogDescription>
-            Aponte a câmera para o código de barras, a uns 20-25 cm de distância (mais perto que
-            isso a câmera desse celular não foca).
+            Deixe o código inteiro dentro da faixa, mantenha o celular firme e afaste um pouco se a
+            imagem ficar desfocada.
           </DialogDescription>
         </DialogHeader>
         {erro ? (
@@ -149,7 +174,7 @@ export function BarcodeScannerDialog({
             {/* eslint-disable-next-line jsx-a11y/media-has-caption -- vídeo é só o preview da câmera, sem áudio */}
             <video
               ref={videoRef}
-              className="aspect-square w-full object-cover"
+              className="aspect-video w-full object-contain"
               // O modal centraliza com `translate(-50%,-50%)`; em alguns Android/Chrome um
               // <video> dentro de ancestral com `transform` renderiza preto até ganhar sua
               // própria camada de composição — isso força essa camada.
@@ -158,14 +183,15 @@ export function BarcodeScannerDialog({
               autoPlay
               playsInline
             />
-            <div className="pointer-events-none absolute inset-8 rounded-lg border-2 border-primary-foreground/70" />
+            <div className="pointer-events-none absolute inset-x-5 top-1/2 h-24 -translate-y-1/2 rounded-lg border-2 border-primary-foreground/80 shadow-[0_0_0_999px_rgba(0,0,0,0.2)]" />
             <ScanLine className="pointer-events-none absolute top-1/2 left-1/2 size-6 -translate-x-1/2 -translate-y-1/2 text-primary-foreground/70" />
           </div>
         )}
-        {/* DEBUG TEMPORÁRIO — remover depois de confirmar o que a câmera aceita. */}
-        <p className="break-all rounded bg-muted px-2 py-1 font-mono text-[10px] text-muted-foreground">
-          {debug}
-        </p>
+        {cameraPronta ? (
+          <p className="text-center text-xs text-muted-foreground">
+            Câmera pronta. Posicione as barras na horizontal dentro da faixa.
+          </p>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

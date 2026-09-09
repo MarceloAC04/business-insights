@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   List as ListIcon,
   Pencil,
   Plus,
@@ -58,6 +59,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { LinkAgendamentoCompacto } from "@/components/configuracoes/agendamento-screen";
 import {
   Dialog,
   DialogContent,
@@ -84,6 +86,7 @@ import {
   formatMoedaInput,
   formatTelefone,
   parseMoedaInput,
+  pluralizar,
 } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -97,11 +100,13 @@ import {
   useEditarAtendimento,
   useEstoque,
   useFinalizarAtendimento,
+  useHorarioFuncionamento,
   useServicos,
 } from "@/lib/queries";
 import type {
   Atendimento,
   FaltanteEstoque,
+  HorarioDia,
   ItemEstoque,
   Servico,
   StatusAtendimento,
@@ -174,6 +179,26 @@ function nomesDosServicos(a: Atendimento): string {
   return a.servicos.map((s) => s.nome).join(" + ");
 }
 
+const DIAS_SEMANA_LONGOS = [
+  "Domingo",
+  "Segunda-feira",
+  "Terça-feira",
+  "Quarta-feira",
+  "Quinta-feira",
+  "Sexta-feira",
+  "Sábado",
+];
+
+function faixaDoHorario(horario: HorarioDia): string {
+  if (!horario.ativo || !horario.hora_inicio || !horario.hora_fim) return "Fechado";
+
+  const faixas = [`${horario.hora_inicio.slice(0, 5)} às ${horario.hora_fim.slice(0, 5)}`];
+  if (horario.hora_inicio_2 && horario.hora_fim_2) {
+    faixas.push(`${horario.hora_inicio_2.slice(0, 5)} às ${horario.hora_fim_2.slice(0, 5)}`);
+  }
+  return faixas.join(" · ");
+}
+
 /**
  * A duração pertence ao serviço cadastrado e pode estar ausente em serviços
  * antigos. Nesse caso, a agenda mostra a lacuna em vez de sugerir um término
@@ -211,7 +236,9 @@ function AtendimentosPage() {
   const [finalizar, setFinalizar] = useState<Atendimento | null>(null);
   const [cancelar, setCancelar] = useState<Atendimento | null>(null);
   const [detalhe, setDetalhe] = useState<Atendimento | null>(null);
+  const [horariosAberto, setHorariosAberto] = useState(false);
   const { data: catalogo } = useServicos();
+  const { data: horarioFuncionamento, isPending: carregandoHorario } = useHorarioFuncionamento();
   const duracaoPorServico = useMemo(
     () =>
       new Map((catalogo?.servicos ?? []).map((servico) => [servico.id, servico.duracao_minutos])),
@@ -270,7 +297,7 @@ function AtendimentosPage() {
       titulo="Atendimentos"
       subtitulo={
         data
-          ? `${data.quantidade} atendimentos • saldo de ${formatBRL(data.saldo_liquido)}`
+          ? `${data.quantidade} ${pluralizar(data.quantidade, "atendimento")} • saldo de ${formatBRL(data.saldo_liquido)}`
           : "Agenda, valores e lucro de cada cliente"
       }
       acaoLabel="Agendar atendimento"
@@ -316,6 +343,21 @@ function AtendimentosPage() {
             <SelectItem value="cancelado">Cancelados</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex w-full flex-wrap gap-2 lg:ml-auto lg:w-auto">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 rounded-xl"
+            onClick={() => setHorariosAberto(true)}
+          >
+            <Clock className="size-4" />
+            <span className="hidden sm:inline">Ver horário de funcionamento</span>
+            <span className="sm:hidden">Horários</span>
+          </Button>
+          <div className="min-w-0 flex-1 sm:max-w-md">
+            <LinkAgendamentoCompacto />
+          </div>
+        </div>
       </div>
 
       {isPending ? (
@@ -327,7 +369,7 @@ function AtendimentosPage() {
           descricao={textoDoErro(error)}
         />
       ) : visao === "calendario" ? (
-        <div className="grid grid-cols-1 gap-4 lg:min-h-[calc(100dvh-11rem)] lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
           <CalendarioMes
             mes={mesCalendario}
             onMudarMes={setMesCalendario}
@@ -396,6 +438,56 @@ function AtendimentosPage() {
         onFechar={() => setDetalhe(null)}
       />
       <DialogFinalizar atendimento={finalizar} onFechar={() => setFinalizar(null)} />
+
+      <Dialog open={horariosAberto} onOpenChange={setHorariosAberto}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Horário de funcionamento</DialogTitle>
+            <DialogDescription>
+              Estes são os horários que ficam disponíveis para a cliente escolher no link de
+              agendamento.
+            </DialogDescription>
+          </DialogHeader>
+
+          {carregandoHorario ? (
+            <ListSkeleton linhas={4} />
+          ) : horarioFuncionamento?.horarios.length ? (
+            <ul className="space-y-2">
+              {horarioFuncionamento.horarios
+                .slice()
+                .sort((a, b) => a.dia_semana - b.dia_semana)
+                .map((horario) => (
+                  <li
+                    key={horario.dia_semana}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-border px-3 py-2.5"
+                  >
+                    <span className="text-sm font-medium">
+                      {DIAS_SEMANA_LONGOS[horario.dia_semana] ?? "Dia"}
+                    </span>
+                    <span
+                      className={cn(
+                        "text-right text-sm",
+                        horario.ativo ? "font-semibold" : "text-muted-foreground",
+                      )}
+                    >
+                      {faixaDoHorario(horario)}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+          ) : (
+            <p className="rounded-xl border border-dashed border-border p-3 text-sm text-muted-foreground">
+              O horário de funcionamento ainda não foi configurado.
+            </p>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setHorariosAberto(false)}>
+              Fechar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={cancelar !== null} onOpenChange={(o) => !o && setCancelar(null)}>
         <AlertDialogContent>
@@ -466,7 +558,7 @@ function CalendarioMes({
   }, [mes]);
 
   return (
-    <Card className="flex flex-col overflow-hidden p-0 lg:h-full">
+    <Card className="flex flex-col overflow-hidden p-0 lg:h-[calc(100dvh-13.5rem)]">
       <div className="flex items-center justify-between gap-2 border-b border-border p-3">
         <p className="font-display text-base font-semibold">
           {capitalizar(format(mes, "MMMM 'de' yyyy", { locale: ptBR }))}
@@ -633,7 +725,7 @@ function AtendimentoCard({
           <p className="mt-2 truncate text-xs text-muted-foreground">
             Produtos:{" "}
             {a.materiais
-              .map((m) => `${m.nome} (${m.quantidade} ${m.unidade_consumo ?? ""})`)
+              .map((m) => `${m.nome} (${m.quantidade} ${m.unidade_consumo === "uso" ? pluralizar(m.quantidade, "uso") : m.unidade_consumo ?? ""})`)
               .join(", ")}
           </p>
         ) : null}
@@ -1351,7 +1443,7 @@ function DialogFinalizar({
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="truncate">{grupo.nome}</span>
                         <Pill tone="neutral">
-                          {grupo.itens.length} {grupo.itens.length === 1 ? "item" : "itens"}
+                          {grupo.itens.length} {pluralizar(grupo.itens.length, "item", "itens")}
                         </Pill>
                       </span>
                     </AccordionTrigger>
@@ -1370,7 +1462,7 @@ function DialogFinalizar({
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="truncate">Outros produtos</span>
                         <Pill tone="neutral">
-                          {outrosProdutos.length} {outrosProdutos.length === 1 ? "item" : "itens"}
+                          {outrosProdutos.length} {pluralizar(outrosProdutos.length, "item", "itens")}
                         </Pill>
                       </span>
                     </AccordionTrigger>
@@ -1454,7 +1546,7 @@ function ListaDeProdutos({
                 <span className="block truncate text-sm font-medium">{p.nome}</span>
                 <span className="block text-xs text-muted-foreground">
                   {p.modo_controle === "rendimento_usos"
-                    ? `Disponível: ${p.usos_disponiveis ?? 0} usos • ${formatBRL(p.custo_por_uso ?? 0)}/uso`
+                    ? `Disponível: ${p.usos_disponiveis ?? 0} ${pluralizar(p.usos_disponiveis ?? 0, "uso")} • ${formatBRL(p.custo_por_uso ?? 0)}/uso`
                     : `Saldo: ${p.quantidade_atual} ${p.unidade} • ${formatBRL(p.custo_medio)}`}
                 </span>
               </span>

@@ -3,7 +3,7 @@ import { ImagePlus, Loader2, LogOut, Target } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
-import { AgendamentoScreen } from "@/components/configuracoes/agendamento-screen";
+import { AgendamentoScreen, LinkAgendamentoCard } from "@/components/configuracoes/agendamento-screen";
 import { CustosFixosScreen } from "@/components/configuracoes/custos-fixos-screen";
 import { ServicosScreen } from "@/components/configuracoes/servicos-screen";
 import { Card, ListSkeleton, SectionTitle, StatCard } from "@/components/ui-kit";
@@ -176,6 +176,10 @@ function PerfilPage() {
           tone={custos && custos.total_pendente > 0 ? "warning" : "positive"}
         />
         <StatCard label="Serviços" value={String(servicos.length)} />
+      </div>
+
+      <div className="mt-5">
+        <LinkAgendamentoCard />
       </div>
 
       <div className="mt-5 space-y-6">

@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { GastoBody } from "@/lib/api";
-import { formatBRL, formatDate, formatMoedaInput, MESES, nomeMes, parseMoedaInput } from "@/lib/format";
+import { formatBRL, formatDate, formatMoedaInput, MESES, nomeMes, parseMoedaInput, pluralizar } from "@/lib/format";
 import {
   textoDoErro,
   useCriarGasto,
@@ -273,7 +273,7 @@ function GastosPage() {
       </div>
 
       <div className="mt-4">
-        <SectionTitle hint={`${lista.length} lançamentos`}>Lançamentos</SectionTitle>
+        <SectionTitle hint={`${lista.length} ${pluralizar(lista.length, "lançamento")}`}>Lançamentos</SectionTitle>
         {isPending ? (
           <ListSkeleton />
         ) : isError ? (
