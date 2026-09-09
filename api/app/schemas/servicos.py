@@ -18,6 +18,7 @@ class ProdutoPadraoIn(BaseModel):
 
 class ServicoIn(BaseModel):
     nome: str
+    descricao: str = Field(default="", max_length=500)
     categoria: str = Field(default="Outros", max_length=60)
     preco: float = Field(le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
     duracao_minutos: int
@@ -43,6 +44,7 @@ class ServicoIn(BaseModel):
 
 class ServicoPatchIn(BaseModel):
     nome: str | None = None
+    descricao: str | None = Field(default=None, max_length=500)
     categoria: str | None = Field(default=None, max_length=60)
     preco: float | None = Field(default=None, le=LIMITE_VALOR_INPUT, allow_inf_nan=False)
     duracao_minutos: int | None = None
@@ -104,6 +106,7 @@ class ProdutoPadraoOut(BaseModel):
 class ServicoOut(BaseModel):
     id: str
     nome: str
+    descricao: str = ""
     categoria: str
     preco: float
     duracao_minutos: int | None

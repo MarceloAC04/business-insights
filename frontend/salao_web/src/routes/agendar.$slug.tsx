@@ -16,6 +16,12 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Card, EmptyState, ListSkeleton, Money, Pill, SectionTitle } from "@/components/ui-kit";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -394,34 +400,58 @@ function AgendarPublicoPage() {
 
             <SectionTitle hint="Selecione um ou mais">Serviços</SectionTitle>
             {servicos.length ? (
-              <div className="space-y-4">
+              <Accordion
+                key={servicosPorCategoria.map(([categoria]) => categoria).join("|")}
+                type="multiple"
+                defaultValue={servicosPorCategoria.map(([categoria]) => categoria)}
+                className="space-y-2"
+              >
                 {servicosPorCategoria.map(([categoria, servicosDaCategoria]) => (
-                  <section key={categoria} aria-label={`Categoria ${categoria}`}>
-                    <h3 className="mb-2 text-sm font-semibold text-primary-dark">{categoria}</h3>
-                    <ul className="space-y-2">
-                      {servicosDaCategoria.map((s) => (
-                        <li key={s.id}>
-                          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface p-3">
-                            <span className="flex min-w-0 items-center gap-2.5">
-                              <Checkbox
-                                checked={servicoIds.includes(s.id)}
-                                onCheckedChange={() => alternarServico(s.id)}
-                              />
-                              <span className="min-w-0">
-                                <span className="block truncate text-sm font-medium">{s.nome}</span>
-                                <span className="text-xs text-muted-foreground">
-                                  {s.duracao_minutos} min
+                  <AccordionItem
+                    key={categoria}
+                    value={categoria}
+                    className="rounded-xl border border-border bg-surface px-3"
+                  >
+                    <AccordionTrigger className="py-3 text-sm font-semibold text-primary-dark no-underline hover:no-underline">
+                      <span className="flex items-center gap-2">
+                        {categoria}
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
+                          {servicosDaCategoria.length}
+                        </span>
+                      </span>
+                    </AccordionTrigger>
+                    <AccordionContent className="pb-3">
+                      <ul className="space-y-2">
+                        {servicosDaCategoria.map((s) => (
+                          <li key={s.id}>
+                            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface-2 p-3">
+                              <span className="flex min-w-0 items-start gap-2.5">
+                                <Checkbox
+                                  checked={servicoIds.includes(s.id)}
+                                  onCheckedChange={() => alternarServico(s.id)}
+                                  className="mt-0.5"
+                                />
+                                <span className="min-w-0">
+                                  <span className="block truncate text-sm font-medium">{s.nome}</span>
+                                  {s.descricao?.trim() ? (
+                                    <span className="mt-0.5 block line-clamp-2 text-xs leading-4 text-muted-foreground">
+                                      {s.descricao}
+                                    </span>
+                                  ) : null}
+                                  <span className="mt-1 block text-xs text-primary">
+                                    {s.duracao_minutos} min
+                                  </span>
                                 </span>
                               </span>
-                            </span>
-                            <Money value={s.preco} className="shrink-0" />
-                          </label>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
+                              <Money value={s.preco} className="shrink-0" />
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    </AccordionContent>
+                  </AccordionItem>
                 ))}
-              </div>
+              </Accordion>
             ) : (
               <EmptyState
                 icon={<Scissors className="size-5" />}

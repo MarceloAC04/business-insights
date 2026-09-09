@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -47,6 +49,7 @@ import type { Servico } from "@/lib/types";
 interface FormServico {
   id?: string;
   nome: string;
+  descricao: string;
   categoria: string;
   preco: string;
   duracao: string;
@@ -65,6 +68,7 @@ export function ServicosScreen() {
   const [aberto, setAberto] = useState(false);
   const [form, setForm] = useState<FormServico>({
     nome: "",
+    descricao: "",
     categoria: "",
     preco: "",
     duracao: "",
@@ -85,6 +89,14 @@ export function ServicosScreen() {
       ? servicos.filter((servico) => servico.nome.toLocaleLowerCase("pt-BR").includes(busca))
       : servicos;
   }, [buscaServico, servicos]);
+  const servicosPorCategoria = useMemo(() => {
+    const grupos = new Map<string, Servico[]>();
+    servicosFiltrados.forEach((servico) => {
+      const categoria = servico.categoria?.trim() || "Outros";
+      grupos.set(categoria, [...(grupos.get(categoria) ?? []), servico]);
+    });
+    return [...grupos.entries()];
+  }, [servicosFiltrados]);
   const insumosFiltrados = useMemo(() => {
     const busca = buscaInsumo.trim().toLocaleLowerCase("pt-BR");
     return busca
@@ -101,7 +113,7 @@ export function ServicosScreen() {
     }, 0);
 
   const abrirNovoServico = () => {
-    setForm({ nome: "", categoria: "", preco: "", duracao: "", produtos: [] });
+    setForm({ nome: "", descricao: "", categoria: "", preco: "", duracao: "", produtos: [] });
     setBuscaInsumo("");
     setAberto(true);
   };
@@ -110,6 +122,7 @@ export function ServicosScreen() {
     setForm({
       id: servico.id,
       nome: servico.nome,
+      descricao: servico.descricao ?? "",
       categoria: servico.categoria ?? "Outros",
       preco: formatMoedaInput(String(Math.round(servico.preco * 100))),
       duracao: servico.duracao_minutos ? String(servico.duracao_minutos) : "",
@@ -136,6 +149,7 @@ export function ServicosScreen() {
 
     const body = {
       nome: form.nome.trim(),
+      descricao: form.descricao.trim(),
       categoria: form.categoria.trim(),
       preco,
       duracao_minutos,
@@ -227,64 +241,94 @@ export function ServicosScreen() {
         {carregandoServicos ? (
           <ListSkeleton />
         ) : servicosFiltrados.length ? (
-          <ul className="space-y-3">
-            {servicosFiltrados.map((servico) => {
-              const custo = custoInsumos(
-                servico.produtos_padrao.map((produto) => ({
-                  item_estoque_id: produto.item_estoque_id,
-                  quantidade: produto.quantidade,
-                })),
-              );
+          <Accordion
+            key={servicosPorCategoria.map(([categoria]) => categoria).join("|")}
+            type="multiple"
+            defaultValue={servicosPorCategoria.map(([categoria]) => categoria)}
+            className="space-y-2"
+          >
+            {servicosPorCategoria.map(([categoria, servicosDaCategoria]) => (
+              <AccordionItem
+                key={categoria}
+                value={categoria}
+                className="rounded-xl border border-border bg-surface px-3"
+              >
+                <AccordionTrigger className="py-3 text-sm font-semibold text-primary-dark no-underline hover:no-underline">
+                  <span className="flex items-center gap-2">
+                    {categoria}
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
+                      {servicosDaCategoria.length}
+                    </span>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="pb-3">
+                  <ul className="space-y-3">
+                    {servicosDaCategoria.map((servico) => {
+                      const custo = custoInsumos(
+                        servico.produtos_padrao.map((produto) => ({
+                          item_estoque_id: produto.item_estoque_id,
+                          quantidade: produto.quantidade,
+                        })),
+                      );
 
-              return (
-                <li key={servico.id}>
-                  <Card className="p-4">
-                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold">{servico.nome}</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          {servico.produtos_padrao.length
-                            ? servico.produtos_padrao
-                                .map(
-                                  (produto) =>
-                                    `${produto.quantidade} ${produto.unidade_consumo === "uso" ? pluralizar(produto.quantidade, "uso") : produto.unidade_consumo} ${produto.nome}`,
-                                )
-                                .join(", ")
-                            : "sem insumos padrão"}
-                        </p>
-                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                          <Pill tone="brand">{servico.categoria || "Outros"}</Pill>
-                          <Pill tone="brand">Preço {formatBRL(servico.preco)}</Pill>
-                          <Pill>Custo {formatBRL(custo)}</Pill>
-                          <Pill tone={servico.preco - custo >= 0 ? "positive" : "negative"}>
-                            Lucro {formatBRL(servico.preco - custo)}
-                          </Pill>
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 gap-1">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          aria-label="Editar serviço"
-                          onClick={() => abrirEdicao(servico)}
-                        >
-                          <Pencil className="size-4" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          aria-label="Excluir serviço"
-                          onClick={() => setServicoParaExcluir(servico)}
-                        >
-                          <Trash2 className="size-4 text-negative" />
-                        </Button>
-                      </div>
-                    </div>
-                  </Card>
-                </li>
-              );
-            })}
-          </ul>
+                      return (
+                        <li key={servico.id}>
+                          <Card className="p-4">
+                            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold">{servico.nome}</p>
+                                {servico.descricao?.trim() ? (
+                                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                                    {servico.descricao}
+                                  </p>
+                                ) : null}
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  {servico.produtos_padrao.length
+                                    ? servico.produtos_padrao
+                                        .map(
+                                          (produto) =>
+                                            `${produto.quantidade} ${produto.unidade_consumo === "uso" ? pluralizar(produto.quantidade, "uso") : produto.unidade_consumo} ${produto.nome}`,
+                                        )
+                                        .join(", ")
+                                    : "sem insumos padrão"}
+                                </p>
+                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                  <Pill tone="brand">{servico.categoria || "Outros"}</Pill>
+                                  <Pill tone="brand">Preço {formatBRL(servico.preco)}</Pill>
+                                  <Pill>Custo {formatBRL(custo)}</Pill>
+                                  <Pill tone={servico.preco - custo >= 0 ? "positive" : "negative"}>
+                                    Lucro {formatBRL(servico.preco - custo)}
+                                  </Pill>
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 gap-1">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  aria-label="Editar serviço"
+                                  onClick={() => abrirEdicao(servico)}
+                                >
+                                  <Pencil className="size-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  aria-label="Excluir serviço"
+                                  onClick={() => setServicoParaExcluir(servico)}
+                                >
+                                  <Trash2 className="size-4 text-negative" />
+                                </Button>
+                              </div>
+                            </div>
+                          </Card>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
         ) : (
           <EmptyState
             icon={<Scissors className="size-5" />}
@@ -324,6 +368,20 @@ export function ServicosScreen() {
                 onChange={(evento) => setForm({ ...form, nome: evento.target.value })}
                 placeholder="Ex.: extensão de cílios"
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="descricao-servico">Descrição (opcional)</Label>
+              <Textarea
+                id="descricao-servico"
+                value={form.descricao}
+                onChange={(evento) => setForm({ ...form, descricao: evento.target.value })}
+                placeholder="Explique brevemente como é o serviço"
+                maxLength={500}
+                rows={3}
+              />
+              <p className="text-right text-xs text-muted-foreground">
+                {form.descricao.length}/500
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="categoria-servico">Categoria</Label>

@@ -970,7 +970,7 @@ Tabela de preços do salão. Módulo próprio para não estourar o `perfil`.
 
 ```json
 { "servicos": [
-  { "id": "uuid", "nome": "Extensão de cílios", "categoria": "Cílios", "preco": 180.00,
+  { "id": "uuid", "nome": "Extensão de cílios", "descricao": "Alongamento com efeito natural.", "categoria": "Cílios", "preco": 180.00,
     "duracao_minutos": 90,
     "produtos_padrao": [
       { "item_estoque_id": "uuid", "nome": "Fio mink 0.07",
@@ -982,6 +982,10 @@ Tabela de preços do salão. Módulo próprio para não estourar o `perfil`.
 `duracao_minutos` existe por causa do **agendamento público** (§10): é o que o
 servidor soma para calcular quanto tempo um horário escolhido pelo cliente bloqueia na
 agenda. Obrigatório e `> 0` — sem duração não dá para calcular horário livre.
+
+`descricao` é opcional, aceita até 500 caracteres e é devolvida no catálogo público
+para a cliente entender o serviço antes de selecioná-lo. Ela não participa de nenhum
+cálculo financeiro nem do cálculo de duração.
 
 `produtos_padrao` é o vínculo do serviço com o estoque: **todo serviço realizado
 consome, por padrão, os itens listados aqui**. É o que a tela de finalizar atendimento
@@ -1016,7 +1020,7 @@ Mesmo corpo nos dois. O `PATCH` **substitui** a lista inteira de produtos padrã
 app manda o estado final da tela, não um diff:
 
 ```json
-{ "nome": "Extensão de cílios", "categoria": "Cílios", "preco": 180.00, "duracao_minutos": 90,
+{ "nome": "Extensão de cílios", "descricao": "Alongamento com efeito natural.", "categoria": "Cílios", "preco": 180.00, "duracao_minutos": 90,
   "produtos_padrao": [
     { "item_estoque_id": "uuid", "quantidade": 1 }
   ] }
@@ -1222,7 +1226,7 @@ endereço, expediente, serviços e preços).
                    "hora_inicio_2": "13:00", "hora_fim_2": "18:00" }]
   },
   "servicos": [
-    { "id": "uuid", "nome": "Extensão de cílios", "categoria": "Cílios",
+    { "id": "uuid", "nome": "Extensão de cílios", "descricao": "Alongamento com efeito natural.", "categoria": "Cílios",
       "preco": 180.00, "duracao_minutos": 90 }
   ]
 }
@@ -1232,6 +1236,9 @@ endereço, expediente, serviços e preços).
 custo fixo, estoque ou qualquer outro dado sensível do módulo `perfil` — os contatos,
 endereço e expediente acima são públicos porque a profissional opta por configurá-los
 para a cliente na própria tela Perfil.
+
+`descricao` é opcional e acompanha cada serviço no catálogo. Serviços antigos sem
+descrição devolvem `descricao: ""`.
 
 ### `GET /agendamento-publico/{slug}/horarios-disponiveis` — `NOVO`
 

@@ -131,7 +131,7 @@ def criar_categoria(supabase: Client, user_id: str, body: CategoriaServicoIn) ->
 def _buscar_servico(supabase: Client, user_id: str, servico_id: str) -> dict:
     resp = (
         supabase.table("servicos")
-        .select("id, nome, categoria, preco, duracao_minutos, ativo")
+        .select("id, nome, descricao, categoria, preco, duracao_minutos, ativo")
         .eq("user_id", user_id)
         .eq("id", servico_id)
         .execute()
@@ -150,6 +150,7 @@ def _montar_saida(supabase: Client, servico: dict) -> dict:
     return {
         "id": servico["id"],
         "nome": servico["nome"],
+        "descricao": servico.get("descricao", ""),
         "categoria": servico.get("categoria", "Outros"),
         "preco": servico["preco"],
         "duracao_minutos": servico.get("duracao_minutos"),
@@ -161,7 +162,7 @@ def _montar_saida(supabase: Client, servico: dict) -> dict:
 def listar(supabase: Client, user_id: str) -> dict:
     resp = (
         supabase.table("servicos")
-        .select("id, nome, categoria, preco, duracao_minutos, ativo")
+        .select("id, nome, descricao, categoria, preco, duracao_minutos, ativo")
         .eq("user_id", user_id)
         .eq("ativo", True)
         .order("nome")
@@ -174,6 +175,7 @@ def listar(supabase: Client, user_id: str) -> dict:
             {
                 "id": s["id"],
                 "nome": s["nome"],
+                "descricao": s.get("descricao", ""),
                 "categoria": s.get("categoria", "Outros"),
                 "preco": s["preco"],
                 "duracao_minutos": s.get("duracao_minutos"),
@@ -193,6 +195,7 @@ def criar(supabase: Client, user_id: str, body: ServicoIn) -> dict:
         .insert({
             "user_id": user_id,
             "nome": body.nome,
+            "descricao": body.descricao,
             "categoria": body.categoria,
             "preco": body.preco,
             "duracao_minutos": body.duracao_minutos,
@@ -219,6 +222,8 @@ def editar(supabase: Client, user_id: str, servico_id: str, body: ServicoPatchIn
     campos = {}
     if body.nome is not None:
         campos["nome"] = body.nome
+    if body.descricao is not None:
+        campos["descricao"] = body.descricao
     if body.categoria is not None:
         campos["categoria"] = body.categoria
     if body.preco is not None:

@@ -259,6 +259,7 @@ export interface ProdutoPadrao {
 export interface Servico {
   id: string;
   nome: string;
+  descricao: string;
   categoria: string;
   preco: number;
   /** Nulo até a usuária preencher (serviço antigo). Obrigatório em cadastro novo — base do agendamento público. */
@@ -347,6 +348,7 @@ export interface SalaoPublico {
 export interface ServicoPublico {
   id: string;
   nome: string;
+  descricao?: string;
   categoria: string;
   preco: number;
   duracao_minutos: number;

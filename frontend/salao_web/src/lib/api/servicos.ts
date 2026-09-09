@@ -12,6 +12,7 @@ import { Paths } from "./paths";
 
 export interface ServicoBody {
   nome: string;
+  descricao?: string;
   categoria: string;
   preco: number;
   /** Necessária para calcular os horários disponíveis do agendamento público. */

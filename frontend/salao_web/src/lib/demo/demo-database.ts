@@ -94,6 +94,7 @@ interface ItemRow {
 interface ServicoRow {
   id: string;
   nome: string;
+  descricao: string;
   categoria: string;
   preco: number;
   duracao_minutos: number | null;
@@ -1273,6 +1274,7 @@ export class DemoDatabase {
     const servico: ServicoRow = {
       id: this.novoId("servico"),
       nome: texto(body, "nome"),
+      descricao: texto(body, "descricao"),
       categoria,
       preco: numero(body, "preco"),
       duracao_minutos: numero(body, "duracao_minutos"),
@@ -1289,6 +1291,7 @@ export class DemoDatabase {
     const categoria = texto(body, "categoria") || servico.categoria;
     this.validarCategoriaServico(categoria);
     servico.nome = texto(body, "nome");
+    if ("descricao" in body) servico.descricao = texto(body, "descricao");
     servico.categoria = categoria;
     servico.preco = numero(body, "preco");
     servico.duracao_minutos = numero(body, "duracao_minutos", servico.duracao_minutos ?? 0);
@@ -1878,6 +1881,7 @@ export class DemoDatabase {
       {
         id: this.novoId("servico"),
         nome: "Extensão de cílios",
+        descricao: "",
         categoria: "Cílios",
         preco: 180,
         duracao_minutos: 120,
@@ -1886,6 +1890,7 @@ export class DemoDatabase {
       {
         id: this.novoId("servico"),
         nome: "Manutenção de cílios",
+        descricao: "",
         categoria: "Cílios",
         preco: 100,
         duracao_minutos: 60,
@@ -1894,6 +1899,7 @@ export class DemoDatabase {
       {
         id: this.novoId("servico"),
         nome: "Sobrancelha fio a fio",
+        descricao: "",
         categoria: "Sobrancelhas",
         preco: 120,
         duracao_minutos: 45,

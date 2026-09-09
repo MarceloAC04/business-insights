@@ -25,6 +25,7 @@ class HorarioPublicoOut(BaseModel):
 class ServicoPublicoOut(BaseModel):
     id: str
     nome: str
+    descricao: str = ""
     categoria: str = "Outros"
     preco: float
     duracao_minutos: int
