@@ -51,6 +51,7 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
     value: {
+      userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36",
       serviceWorker: {
         register: async () => registration,
         ready: Promise.resolve(registration),
@@ -128,4 +129,13 @@ test("não oferece push em contexto inseguro", async () => {
   assert.equal(push.webPushDisponivel(), false);
   assert.equal(await push.obterAssinaturaWebPush(true), null);
   assert.equal(subscriptions, 0);
+});
+
+test("não oferece push em computador", async () => {
+  navigator.userAgent =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36";
+  assert.equal(push.webPushDisponivel(), false);
+  assert.equal(await push.obterAssinaturaWebPush(true), null);
+  assert.equal(subscriptions, 0);
+  assert.equal(permissions, 0);
 });

@@ -30,11 +30,19 @@ export function textoDoErroPush(erro: unknown): string {
 export function webPushDisponivel(): boolean {
   return (
     typeof window !== "undefined" &&
+    dispositivoMovel() &&
     window.isSecureContext &&
     "Notification" in window &&
     "serviceWorker" in navigator &&
     "PushManager" in window
   );
+}
+
+const PADRAO_DISPOSITIVO_MOVEL =
+  /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i;
+
+function dispositivoMovel(): boolean {
+  return typeof navigator !== "undefined" && PADRAO_DISPOSITIVO_MOVEL.test(navigator.userAgent);
 }
 
 async function registroServiceWorker(): Promise<ServiceWorkerRegistration> {
